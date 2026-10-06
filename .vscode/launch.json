@@ -1,0 +1,19 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug pc-application",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Debug/pc-application.exe",
+            "cwd": "${workspaceFolder}",
+            "environment": [
+                {
+                    "name": "PATH",
+                    "value": "C:\\Qt\\6.11.2\\msvc2022_64\\bin;${env:PATH}"
+                }
+            ],
+            "console": "integratedTerminal"
+        }
+    ]
+}
