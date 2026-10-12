@@ -11,6 +11,10 @@ qt_standard_project_setup()
 
 qt_add_executable(pc-application
     src/main.cpp
+    src/ui/MainWindow.cpp
+    src/ui/MainWindow.h
+    src/ui/VideoWidget.cpp
+    src/ui/VideoWidget.h
 )
 
 target_link_libraries(pc-application
