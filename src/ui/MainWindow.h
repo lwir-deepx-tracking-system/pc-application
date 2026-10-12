@@ -5,14 +5,16 @@
 
 class QComboBox;
 class QPushButton;
+class QLabel;
 
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
 
 public:
-    explicit MainWindow(QWidget *parent = nullptr);
+    explicit MainWindow(QWidget *parent = nullptr, bool dummyPreview = true);
     void setDisplayFrame(const QImage &image, const QVector<TrackBox> &tracks);
+    void setVideoFps(double fps);
 
 signals:
     void targetSetRequested(quint32 trackId);
@@ -26,4 +28,5 @@ private:
     VideoWidget *videoWidget;
     QComboBox *trackCombo;
     QPushButton *trackButton;
+    QLabel *videoFpsLabel;
 };
