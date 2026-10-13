@@ -55,7 +55,7 @@ QImage makeDummyImage()
 }
 }
 
-MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
+MainWindow::MainWindow(QWidget *parent, bool dummyPreview) : QMainWindow(parent)
 {
     setWindowTitle("LWIR Target Tracking System");
     resize(1280, 720);
@@ -130,7 +130,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     auto *diagnosticGroup = new QGroupBox("DIAGNOSTICS");
     auto *diagnosticLayout = new QVBoxLayout(diagnosticGroup);
     diagnosticLayout->setSpacing(14);
-    for (const auto &name : {"Video FPS", "Metadata FPS", "Metadata Loss", "Video Missing",
+    videoFpsLabel = addValueRow(diagnosticLayout, "Video FPS", "--");
+    videoFpsLabel->setObjectName("videoFps");
+    for (const auto &name : {"Metadata FPS", "Metadata Loss", "Video Missing",
                              "Sync Miss", "Detection", "Track Count"})
         addValueRow(diagnosticLayout, name, "--");
     panelLayout->addWidget(diagnosticGroup);
@@ -144,16 +146,23 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     connect(clearButton, &QPushButton::clicked, this, &MainWindow::requestTargetClear);
     connect(videoWidget, &VideoWidget::targetSetRequested, this, &MainWindow::requestTargetSet);
     connect(videoWidget, &VideoWidget::targetClearRequested, this, &MainWindow::requestTargetClear);
+    connect(videoWidget, &VideoWidget::framePainted, this, &MainWindow::framePainted);
 
-    setDisplayFrame(makeDummyImage(), {{3, QRectF(82, 150, 76, 162)},
-                                     {15, QRectF(277, 195, 76, 162)},
-                                     {22, QRectF(472, 125, 76, 162)}});
+    if (dummyPreview)
+        setDisplayFrame(makeDummyImage(), {{3, QRectF(82, 150, 76, 162)},
+                                         {15, QRectF(277, 195, 76, 162)},
+                                         {22, QRectF(472, 125, 76, 162)}});
     trackButton->setEnabled(enteredTrackId() != 0);
 }
 
-void MainWindow::setDisplayFrame(const QImage &image, const QVector<TrackBox> &tracks)
+void MainWindow::setVideoFps(double fps)
 {
-    videoWidget->setDisplayFrame(image, tracks);
+    videoFpsLabel->setText(QString::number(fps, 'f', 1));
+}
+
+void MainWindow::setDisplayFrame(const QImage &image, const QVector<TrackBox> &tracks, quint64 frameId)
+{
+    videoWidget->setDisplayFrame(image, tracks, frameId);
     const QString typedId = trackCombo->currentText();
     const QSignalBlocker blocker(trackCombo);
     trackCombo->clear();
