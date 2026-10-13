@@ -27,7 +27,8 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(GSTREAMER REQUIRED IMPORTED_TARGET
     gstreamer-1.0>=1.22 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-rtp-1.0)
 
-qt_add_library(video-receiver STATIC src/video/VideoReceiver.cpp src/video/VideoReceiver.h src/video/VideoTrace.h)
+qt_add_library(video-receiver STATIC src/video/VideoReceiver.cpp src/video/VideoReceiver.h
+    src/video/VideoTrace.cpp src/video/VideoTrace.h)
 target_include_directories(video-receiver PUBLIC src)
 target_link_libraries(video-receiver PUBLIC Qt6::Gui PkgConfig::GSTREAMER)
 

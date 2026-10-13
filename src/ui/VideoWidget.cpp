@@ -2,6 +2,7 @@
 
 #include <QMouseEvent>
 #include <QPainter>
+#include <chrono>
 
 VideoWidget::VideoWidget(QWidget *parent) : QWidget(parent)
 {
@@ -10,11 +11,13 @@ VideoWidget::VideoWidget(QWidget *parent) : QWidget(parent)
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 }
 
-void VideoWidget::setDisplayFrame(const QImage &newImage, const QVector<TrackBox> &newTracks)
+void VideoWidget::setDisplayFrame(const QImage &newImage, const QVector<TrackBox> &newTracks,
+                                  quint64 frameId)
 {
     // Replace image and overlays together so old boxes cannot survive a new frame.
     image = newImage.copy();
     tracks = newImage.isNull() ? QVector<TrackBox>{} : newTracks;
+    pendingFrameId = newImage.isNull() ? 0 : frameId;
     update();
 }
 
@@ -58,6 +61,14 @@ void VideoWidget::paintEvent(QPaintEvent *)
         painter.drawText(labelRect.adjusted(6, 0, -6, 0), Qt::AlignVCenter, label);
     }
     painter.restore();
+    painter.end();
+    if (pendingFrameId) {
+        const quint64 paintedId = pendingFrameId;
+        pendingFrameId = 0; // Repainting the same image is not another delivered frame.
+        const qint64 now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        emit framePainted(paintedId, now);
+    }
 }
 
 void VideoWidget::mousePressEvent(QMouseEvent *event)

@@ -146,6 +146,7 @@ MainWindow::MainWindow(QWidget *parent, bool dummyPreview) : QMainWindow(parent)
     connect(clearButton, &QPushButton::clicked, this, &MainWindow::requestTargetClear);
     connect(videoWidget, &VideoWidget::targetSetRequested, this, &MainWindow::requestTargetSet);
     connect(videoWidget, &VideoWidget::targetClearRequested, this, &MainWindow::requestTargetClear);
+    connect(videoWidget, &VideoWidget::framePainted, this, &MainWindow::framePainted);
 
     if (dummyPreview)
         setDisplayFrame(makeDummyImage(), {{3, QRectF(82, 150, 76, 162)},
@@ -159,9 +160,9 @@ void MainWindow::setVideoFps(double fps)
     videoFpsLabel->setText(QString::number(fps, 'f', 1));
 }
 
-void MainWindow::setDisplayFrame(const QImage &image, const QVector<TrackBox> &tracks)
+void MainWindow::setDisplayFrame(const QImage &image, const QVector<TrackBox> &tracks, quint64 frameId)
 {
-    videoWidget->setDisplayFrame(image, tracks);
+    videoWidget->setDisplayFrame(image, tracks, frameId);
     const QString typedId = trackCombo->currentText();
     const QSignalBlocker blocker(trackCombo);
     trackCombo->clear();

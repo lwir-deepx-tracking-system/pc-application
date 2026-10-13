@@ -17,7 +17,8 @@ VideoReceiver::~VideoReceiver()
     stop();
 }
 
-bool VideoReceiver::start(quint16 port, const QString &tracePath, uint latencyMs)
+bool VideoReceiver::start(quint16 port, const QString &tracePath, uint latencyMs,
+                          const QString &packetTracePath)
 {
     stop();
     configureGStreamerRuntime();
@@ -27,13 +28,14 @@ bool VideoReceiver::start(quint16 port, const QString &tracePath, uint latencyMs
         g_clear_error(&error);
         return false;
     }
-    if (!trace.open(tracePath)) {
-        emit errorOccurred("Cannot open video trace: " + tracePath);
+    if (!trace.open(tracePath, packetTracePath)) {
+        emit errorOccurred("Cannot open video trace paths (use separate summary and packet files): "
+                           + tracePath + "; " + packetTracePath);
         return false;
     }
     // These buffering values are PoC settings, not final integration defaults.
     const QString description = QString(
-        "udpsrc port=%1 caps=\"application/x-rtp,media=video,encoding-name=JPEG,clock-rate=90000,payload=26\" "
+        "udpsrc name=input port=%1 caps=\"application/x-rtp,media=video,encoding-name=JPEG,clock-rate=90000,payload=26\" "
         "! rtpjitterbuffer latency=%2 drop-on-latency=true "
         "! rtpjpegdepay name=depay ! jpegdec ! videoconvert "
         "! video/x-raw,format=RGB,width=640,height=480 "
@@ -53,6 +55,12 @@ bool VideoReceiver::start(quint16 port, const QString &tracePath, uint latencyMs
     gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, &VideoReceiver::inspectRtp, this, nullptr);
     gst_object_unref(pad);
     gst_object_unref(depay);
+    GstElement *input = gst_bin_get_by_name(GST_BIN(pipeline), "input");
+    pad = gst_element_get_static_pad(input, "src");
+    gst_pad_add_probe(pad, GstPadProbeType(GST_PAD_PROBE_TYPE_BUFFER | GST_PAD_PROBE_TYPE_BUFFER_LIST),
+        &VideoReceiver::inspectIncomingRtp, this, nullptr);
+    gst_object_unref(pad);
+    gst_object_unref(input);
     bus = gst_element_get_bus(pipeline);
     if (gst_element_set_state(pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
         stop();
@@ -96,10 +104,11 @@ GstPadProbeReturn VideoReceiver::inspectRtp(GstPad *, GstPadProbeInfo *info, gpo
         if (gst_rtp_buffer_get_marker(&rtp)) {
             const quint32 timestamp = gst_rtp_buffer_get_timestamp(&rtp);
             const quint64 pts = GST_BUFFER_PTS(buffer);
-            self->trace.record("receiver_rtp", 0, pts, timestamp, gst_rtp_buffer_get_seq(&rtp));
+            const quint32 ssrc = gst_rtp_buffer_get_ssrc(&rtp);
+            self->trace.record("receiver_rtp", 0, pts, timestamp, gst_rtp_buffer_get_seq(&rtp), ssrc);
             if (GST_CLOCK_TIME_IS_VALID(pts)) {
                 QMutexLocker lock(&self->timestampMutex);
-                self->timestamps[pts] = timestamp;
+                self->timestamps[pts] = {ssrc, timestamp};
                 while (self->timestamps.size() > 256)
                     self->timestamps.erase(self->timestamps.begin());
             }
@@ -109,8 +118,38 @@ GstPadProbeReturn VideoReceiver::inspectRtp(GstPad *, GstPadProbeInfo *info, gpo
     return GST_PAD_PROBE_OK;
 }
 
+GstPadProbeReturn VideoReceiver::inspectIncomingRtp(GstPad *, GstPadProbeInfo *info, gpointer data)
+{
+    auto *self = static_cast<VideoReceiver *>(data);
+    if (!self->trace.active()) return GST_PAD_PROBE_OK;
+    const auto observe = [self](GstBuffer *buffer) {
+        const qint64 observedNs = VideoTrace::nowNs();
+        GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
+        if (buffer && gst_rtp_buffer_map(buffer, GST_MAP_READ, &rtp)) {
+            self->trace.record("receiver_packet", 0, GST_BUFFER_PTS(buffer),
+                gst_rtp_buffer_get_timestamp(&rtp), gst_rtp_buffer_get_seq(&rtp),
+                gst_rtp_buffer_get_ssrc(&rtp), gst_rtp_buffer_get_marker(&rtp), observedNs);
+            gst_rtp_buffer_unmap(&rtp);
+        }
+    };
+    if (GST_PAD_PROBE_INFO_TYPE(info) & GST_PAD_PROBE_TYPE_BUFFER)
+        observe(GST_PAD_PROBE_INFO_BUFFER(info));
+    else if (GST_PAD_PROBE_INFO_TYPE(info) & GST_PAD_PROBE_TYPE_BUFFER_LIST) {
+        GstBufferList *list = GST_PAD_PROBE_INFO_BUFFER_LIST(info);
+        for (guint i = 0; i < gst_buffer_list_length(list); ++i)
+            observe(gst_buffer_list_get(list, i));
+    }
+    return GST_PAD_PROBE_OK;
+}
+
+void VideoReceiver::recordPaint(quint64 frameId, qint64 monotonicNs)
+{
+    trace.painted(frameId, monotonicNs);
+}
+
 void VideoReceiver::poll()
 {
+    trace.drain();
     while (GstMessage *message = gst_bus_pop_filtered(bus,
             GstMessageType(GST_MESSAGE_ERROR | GST_MESSAGE_EOS))) {
         QString text = "Video stream ended";
@@ -129,6 +168,7 @@ void VideoReceiver::poll()
     }
     // Non-blocking pull: the GStreamer streaming thread performs decode.
     GstSample *sample = gst_app_sink_try_pull_sample(GST_APP_SINK(sink), 0);
+    const qint64 acquiredNs = VideoTrace::nowNs();
     if (sample) {
         GstBuffer *buffer = gst_sample_get_buffer(sample);
         GstVideoInfo info;
@@ -142,18 +182,21 @@ void VideoReceiver::poll()
             const QImage ownedImage = image.copy();
             const quint64 pts = GST_BUFFER_PTS(buffer);
             qint64 rtpTimestamp = -1;
+            qint64 ssrc = -1;
             {
                 QMutexLocker lock(&timestampMutex);
                 const auto found = timestamps.find(pts);
                 if (found != timestamps.end()) {
-                    rtpTimestamp = found->second;
+                    ssrc = found->second.first;
+                    rtpTimestamp = found->second.second;
                     timestamps.erase(timestamps.begin(), std::next(found));
                 }
             }
-            trace.record("appsink", 0, pts, rtpTimestamp);
+            const quint64 frameId = ++deliveryId;
+            trace.record("appsink", frameId, pts, rtpTimestamp, -1, ssrc, false, acquiredNs);
             gst_video_frame_unmap(&frame);
             ++fpsFrames;
-            emit frameReady(ownedImage, pts, rtpTimestamp);
+            emit frameReady(ownedImage, pts, rtpTimestamp, frameId);
         }
         gst_sample_unref(sample);
     }

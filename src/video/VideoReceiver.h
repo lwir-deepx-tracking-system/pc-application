@@ -15,16 +15,19 @@ class VideoReceiver : public QObject
 public:
     explicit VideoReceiver(QObject *parent = nullptr);
     ~VideoReceiver() override;
-    bool start(quint16 port = 5000, const QString &tracePath = {}, uint latencyMs = 50);
+    bool start(quint16 port = 5000, const QString &tracePath = {}, uint latencyMs = 50,
+               const QString &packetTracePath = {});
     void stop();
+    void recordPaint(quint64 frameId, qint64 monotonicNs);
 
 signals:
-    void frameReady(const QImage &image, quint64 ptsNs, qint64 rtpTimestamp);
+    void frameReady(const QImage &image, quint64 ptsNs, qint64 rtpTimestamp, quint64 frameId);
     void fpsChanged(double fps);
     void errorOccurred(const QString &message);
 
 private:
     static GstPadProbeReturn inspectRtp(GstPad *pad, GstPadProbeInfo *info, gpointer data);
+    static GstPadProbeReturn inspectIncomingRtp(GstPad *pad, GstPadProbeInfo *info, gpointer data);
     void poll();
 
     GstElement *pipeline = nullptr;
@@ -33,7 +36,8 @@ private:
     QTimer timer;
     QElapsedTimer fpsClock;
     quint64 fpsFrames = 0;
+    quint64 deliveryId = 0; // Never reset across receiver restarts.
     VideoTrace trace;
     QMutex timestampMutex;
-    std::map<quint64, quint32> timestamps;
+    std::map<quint64, std::pair<quint32, quint32>> timestamps; // PTS -> SSRC, RTP timestamp
 };

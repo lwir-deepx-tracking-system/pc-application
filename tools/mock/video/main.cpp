@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QPainter>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <QDebug>
 #include <gst/app/gstappsrc.h>
 #include <gst/rtp/gstrtpbuffer.h>
@@ -12,12 +13,13 @@
 namespace {
 void recordRtpBuffer(GstBuffer *buffer, VideoTrace *trace)
 {
+    if (!trace->active()) return;
+    const qint64 observedNs = VideoTrace::nowNs();
     GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
     if (buffer && gst_rtp_buffer_map(buffer, GST_MAP_READ, &rtp)) {
-        if (gst_rtp_buffer_get_marker(&rtp))
-            trace->record("sender_rtp",
-                gst_util_uint64_scale_round(GST_BUFFER_PTS(buffer), 30, GST_SECOND) + 1,
-                GST_BUFFER_PTS(buffer), gst_rtp_buffer_get_timestamp(&rtp), gst_rtp_buffer_get_seq(&rtp));
+        trace->record("sender_rtp", 0, GST_BUFFER_PTS(buffer),
+            gst_rtp_buffer_get_timestamp(&rtp), gst_rtp_buffer_get_seq(&rtp),
+            gst_rtp_buffer_get_ssrc(&rtp), gst_rtp_buffer_get_marker(&rtp), observedNs);
         gst_rtp_buffer_unmap(&rtp);
     }
 }
@@ -45,7 +47,8 @@ int main(int argc, char **argv)
     parser.addOption({"host", "Destination IP.", "address", "127.0.0.1"});
     parser.addOption({"port", "Destination UDP port.", "port", "5000"});
     parser.addOption({"frames", "Number of frames; 0 sends until interrupted.", "count", "0"});
-    parser.addOption({"trace", "Timestamp CSV output.", "path"});
+    parser.addOption({"trace", "Frame summary CSV output.", "path"});
+    parser.addOption({"packet-trace", "Optional RTP packet CSV output.", "path"});
     parser.process(app);
     bool portOk = false;
     bool countOk = false;
@@ -61,7 +64,7 @@ int main(int argc, char **argv)
         return 1;
     }
     VideoTrace trace;
-    if (!trace.open(parser.value("trace"))) {
+    if (!trace.open(parser.value("trace"), parser.value("packet-trace"))) {
         qCritical() << "Cannot open trace file";
         return 1;
     }
@@ -97,6 +100,7 @@ int main(int argc, char **argv)
     timer.setInterval(2);
     timer.setTimerType(Qt::PreciseTimer);
     QObject::connect(&timer, &QTimer::timeout, &app, [&] {
+        trace.drain();
         if (GstMessage *message = gst_bus_pop_filtered(bus, GstMessageType(GST_MESSAGE_ERROR | GST_MESSAGE_EOS))) {
             if (GST_MESSAGE_TYPE(message) == GST_MESSAGE_ERROR) {
                 GError *messageError = nullptr;
@@ -131,11 +135,12 @@ int main(int argc, char **argv)
             painter.setFont(font);
             painter.drawText(QRect(20, 20, 600, 60), QString("MOCK VIDEO  |  Frame %1").arg(frameIndex + 1));
         }
+        const qint64 acquiredNs = VideoTrace::nowNs();
         GstBuffer *buffer = gst_buffer_new_allocate(nullptr, image.sizeInBytes(), nullptr);
         gst_buffer_fill(buffer, 0, image.constBits(), image.sizeInBytes());
         GST_BUFFER_PTS(buffer) = pts;
         GST_BUFFER_DURATION(buffer) = gst_util_uint64_scale(frameIndex + 1, GST_SECOND, 30) - pts;
-        trace.record("appsrc", frameIndex + 1, pts);
+        trace.record("appsrc", frameIndex + 1, pts, -1, -1, -1, false, acquiredNs);
         if (gst_app_src_push_buffer(GST_APP_SRC(source), buffer) != GST_FLOW_OK) {
             exitCode = 1;
             app.quit();
