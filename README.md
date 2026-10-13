@@ -1,6 +1,12 @@
 # LWIR PC Application
 
-설계 기준은 Notion의 [Application 설계](https://app.notion.com/p/3f29de3f14a280829f90dc2dfd666d04)에서 관리한다. 이 파일은 개발환경과 실행 방법만 다룬다.
+설계 문서: [Notion Application](https://app.notion.com/p/3f29de3f14a280829f90dc2dfd666d04)
+
+- [수동 영상 테스트: 실행부터 CSV 분석까지](#수동-영상-테스트)
+- [GUI 및 BBox 클릭 테스트](#gui-및-bbox-클릭-테스트)
+- [CSV 항목과 해석](#계측-csv-사용)
+- [자동 통합 시험](#자동-통합-시험)
+- [문제가 생겼을 때](#문제가-생겼을-때)
 
 ## 개발환경
 
@@ -18,74 +24,140 @@ cmake -S . -B build -DCMAKE_PREFIX_PATH=C:/Qt/6.11.2/msvc2022_64
 cmake --build build --config Debug
 ```
 
-Windows 빌드 후 Qt/GStreamer DLL, 필요한 GStreamer 플러그인, Plugin Scanner를 실행 파일 옆에 배치한다. 개발 PoC에서는 GStreamer의 bin DLL을 함께 복사하며, 배포용 최소 의존성 패키징은 별도 작업이다.
+Windows 빌드 시 Qt/GStreamer DLL, 플러그인, Plugin Scanner가 실행 파일 옆에 자동으로 복사된다.
 
-## 영상 수신 PoC
+## 영상 수신
 
-기본 실행은 RTP/JPEG UDP 5000 수신이다. 송신기가 없으면 No video로 시작한다. 영상과 함께 Dummy BBox를 표시하지 않는다. Orange Pi 연결 표시는 TCP Control 상태이므로, 영상만 수신해도 Offline을 유지한다.
+기본 수신 포트는 RTP/JPEG UDP 5000이다. 송신기가 없으면 `No video`가 표시된다.
 
-수신기와 송신기를 별도 터미널에서 실행한다. F5로 수신기를 실행해도 된다.
-
-```powershell
-# 터미널 1: 수신기
-.\build\Debug\pc-application.exe --video-trace build/receiver.csv
-
-# 터미널 2: 640x480, 30 FPS Mock Sender
-.\build\Debug\mock-video-sender.exe --frames 300 --trace build/sender.csv
-```
+아래 절차는 같은 PC에서 Mock 영상을 송수신하고 수신 처리 시간을 측정한다.
 
 Mock Sender는 움직이는 테스트 영상을 `appsrc → videoconvert → I420 → jpegenc → jpegparse → rtpjpegpay → udpsink`로 전송한다. `--frames 300`을 지정하면 300 Frame 후 종료하며 기본값은 계속 송신이다. 다른 PC로 송신하려면 `--host 192.168.10.1`을 지정한다.
 
-수신 포트는 `--video-port`, 송신 포트는 `--port`로 지정한다. `--video-latency 50`은 수신 Jitter Buffer의 실험값(ms)이다. JPEG Quality 80, RTP MTU 1200, appsink 1 Buffer/오래된 Buffer 폐기도 현재 PoC 조건이며 최종 통합값이 아니다.
+수신 포트는 `--video-port`, 송신 포트는 `--port`로 지정한다. Jitter Buffer 지연은 `--video-latency`로 설정하며 기본값은 50ms다. JPEG Quality는 80, RTP MTU는 1200이며 appsink는 최신 Buffer 1개를 유지한다.
 
-Phase 1 GUI만 확인하려면:
+## 수동 영상 테스트
 
-```powershell
-.\build\Debug\pc-application.exe --gui-preview
-```
+### 1. 준비 및 빌드
 
-## 계측 CSV 사용
-
-Trace 옵션을 생략하면 기록하지 않는다. `--video-trace` / `--trace`는 Frame 요약을 켜며 Packet 상세는 별도 옵션으로 필요한 시험에서만 켠다. 두 출력에는 서로 다른 파일 경로를 사용한다.
+VS Code에서 프로젝트를 열고 PowerShell 터미널 두 개를 만든다. 두 터미널의 작업 폴더를 프로젝트 루트로 맞춘다. 아래 경로는 Clone한 위치에 맞게 바꾼다.
 
 ```powershell
-.\build\Debug\pc-application.exe --video-trace build/receiver.csv --video-packet-trace build/receiver-packets.csv
-.\build\Debug\mock-video-sender.exe --frames 300 --trace build/sender.csv --packet-trace build/sender-packets.csv
+Set-Location C:\Project\LWIR_Project\pc-application
 ```
 
-수신기는 창을 닫아 정상 종료한 뒤 요약 CSV를 분석한다. 최대 256개 Frame을 보관하고 오래된 Frame부터 요약을 확정하며, 종료 시 남은 Frame을 기록한다. 따라서 실행 중 최신 요약은 아직 파일에 없을 수 있다. Packet 상세와 확정된 요약은 약 250ms마다 묶어서 저장한다. Streaming Probe에서는 디스크에 쓰지 않는다. 파일별 대기 큐 상한은 1MiB이며 초과한 **로그 Row**나 파일 쓰기 오류는 콘솔에 경고한다. 강제 종료 시 미확정 기록은 남지 않을 수 있다. 이 보관량과 저장 간격은 PoC 구현값이다.
+처음 실행하거나 코드를 수정했다면 VS Code의 CMake Tools에서 Configure 후 **Debug Build**를 실행한다. 명령행 빌드는 위의 [개발환경](#개발환경) 명령을 사용한다. 빌드 후 `build/Debug/pc-application.exe`와 `build/Debug/mock-video-sender.exe`가 있어야 한다.
 
-| Frame 요약 열 | 의미 |
-| --- | --- |
-| `role`, `frameId` | Sender는 Mock 영상 생성 ID. Receiver는 로컬 Frame 전달 ID이며 Camera Frame ID가 아니다. `0`은 appsink 전달을 관측하지 못한 Frame이다. |
-| `ssrc`, `rtpTimestamp` | 송수신 기록의 Frame 대응 후보. PTS와 별도로 보관한다. |
-| `ptsNs`, `jitterPtsNs` | Sender appsrc PTS / Receiver appsink PTS, 그리고 Receiver의 Jitter Buffer 이후 Marker PTS. |
-| `firstSequence`, `lastSequence` | 해당 Frame에서 처음/마지막으로 **관측한** Sequence. 도착 순서이며 유실 계산값이 아니다. |
-| `firstRtpNs`, `lastRtpNs`, `markerRtpNs` | Sender payloader 출력 / Receiver Jitter Buffer 이전의 첫·마지막 Packet 및 마지막으로 관측한 Marker 시각. |
-| `acquiredNs` | Mock 영상 생성 완료 시각. 실제 Camera Exposure 시각이 아니다. |
-| `appsinkNs`, `paintNs` | Decode된 Sample을 가져온 시각, 해당 이미지의 첫 QPainter Draw 완료 시각. 모니터 발광 시각이 아니다. |
-| `displayed` | Receiver에서 실제 Draw했으면 `1`, 관측 기간에 Draw하지 않았으면 `0`. Sender는 빈 칸. |
-| `clockDomain`, `timeUnit` | `local_steady_clock`, `ns`. 같은 장비 내부의 Monotonic 시각끼리만 지연을 계산한다. |
+### 2. 터미널 1에서 수신기 실행
 
-Packet 상세 CSV는 `role,ssrc,rtpTimestamp,sequence,marker,observedMonotonicNs,clockDomain,timeUnit`를 기록한다. 이는 Application Pipeline의 관측 시각이며 NIC의 물리적인 송수신 시각이 아니다. Marker를 관측해도 모든 Packet이 도착했다고 단정하지 않는다.
+```powershell
+.\build\Debug\pc-application.exe --video-trace build/receiver.csv
+```
 
-매칭되지 않은 값은 빈 칸으로 남긴다. `displayed=0`에는 Decode/Buffer 폐기, GUI 표시 생략, 종료 시 아직 대기 중인 Frame 등이 섞일 수 있으므로 Network Loss로 계산하지 않는다. 보관 범위를 넘긴 지연이나 재사용된 SSRC/RTP Timestamp는 최종 Sync 정책이 확정되기 전의 PoC 한계다.
+송신 전에는 `No video`가 표시된다. CSV 기록에는 `--video-trace`가 필요하다. 기본 F5 실행에는 이 옵션이 없다.
 
-Decode 이후 PTS가 RTP 숫자와 같다고 가정하지 않는다. 현재 수신기는 RTP Marker Packet의 PTS와 appsink PTS를 대응시키는 PoC 관측만 수행하며, Metadata의 최종 Sync Key를 확정하지 않는다.
+### 3. 터미널 2에서 Mock Sender 실행
 
-다음 명령은 Receiver 원본 CSV에서 세 구간의 최소·평균·최대 시간을 ms로 출력하고, 선택적으로 Frame별 계산 결과를 저장한다. 누락되거나 시간 순서가 역전된 구간은 계산에서 제외한다. 실행 정책은 이 PowerShell 프로세스에만 적용된다.
+```powershell
+.\build\Debug\mock-video-sender.exe --frames 300 --trace build/sender.csv
+```
+
+약 10초 동안 640×480, 30 FPS 테스트 영상을 전송한 뒤 송신기가 자동 종료한다. 더 오래 관찰하려면 `--frames 900`처럼 Frame 수를 늘린다.
+
+### 4. 송신 중 정상 동작 확인
+
+- 움직이는 원과 Frame 번호가 있는 Mock 영상이 보인다.
+- `Video FPS`에 약 30 FPS가 표시된다.
+- 창 크기를 바꿔도 영상 비율이 유지된다.
+- Mock은 영상만 전송하므로 BBox가 없고 Orange Pi 연결 표시는 `Offline`이다.
+
+창을 잠시 최소화했다가 복원하면 표시되지 않은 Frame의 `displayed=0` 기록도 확인할 수 있다.
+
+### 5. 송신 종료 후 수신기 창 닫기
+
+송신기가 종료되면 수신기 창도 닫는다. 창을 닫을 때 남은 Frame 요약이 CSV에 저장된다.
+
+같은 명령으로 다시 시험하면 기존 CSV를 덮어쓴다. 비교할 기록은 먼저 다른 이름으로 보관한다.
+
+### 6. PC 내부 지연을 ms로 분석
+
+프로젝트 루트의 PowerShell에서 실행한다.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/mock/video/Measure-VideoTrace.ps1 -Path build/receiver.csv -OutputCsv build/receiver-ms.csv
 ```
 
-- `FirstRtpToPaintMs`: 첫 RTP 관측 → GUI Draw
-- `MarkerToAppsinkMs`: Marker 관측 → Decode Sample 확보
-- `AppsinkToPaintMs`: Decode Sample 확보 → GUI Draw
+세 구간의 최소·평균·최대 시간이 ms로 표시되고, Frame별 결과가 `build/receiver-ms.csv`에 저장된다.
 
-서로 다른 장비의 Monotonic 시각을 빼거나 PTS를 Monotonic 시각에서 빼서 End-to-End 지연으로 해석하지 않는다. Ethernet RTT 또는 RTT/2도 실제 Video 편도 전송 시간이 아니다.
+| 지표 | 측정 구간 |
+| --- | --- |
+| `FirstRtpToPaintMs` | 첫 RTP 관측 → GUI Draw |
+| `MarkerToAppsinkMs` | Marker 관측 → Decode Sample 확보 |
+| `AppsinkToPaintMs` | Decode Sample 확보 → GUI Draw |
 
-## 통합 시험
+| 결과 파일 | 내용 |
+| --- | --- |
+| `build/receiver.csv` | 수신 Frame 요약과 원본 시각, `displayed` 상태 |
+| `build/sender.csv` | 송신 Frame ID, PTS, SSRC/RTP Timestamp 대응 및 원본 시각 |
+| `build/receiver-ms.csv` | Frame별 PC 내부 지연 계산 결과 |
+
+### 필요할 때 Packet 상세도 기록
+
+기본 절차는 Frame 요약만 기록한다. Packet 순서나 Marker를 조사할 때는 2·3단계 명령을 각각 다음으로 바꾼다. 종료·분석 순서는 동일하다.
+
+```powershell
+# 터미널 1
+.\build\Debug\pc-application.exe --video-trace build/receiver.csv --video-packet-trace build/receiver-packets.csv
+
+# 터미널 2
+.\build\Debug\mock-video-sender.exe --frames 300 --trace build/sender.csv --packet-trace build/sender-packets.csv
+```
+
+Packet 기록은 `build/receiver-packets.csv`, `build/sender-packets.csv`에 저장된다. ms 분석에는 `build/receiver.csv`를 사용한다.
+
+## GUI 및 BBox 클릭 테스트
+
+영상 수신기를 종료한 뒤 Dummy 영상과 BBox가 있는 GUI Preview를 실행한다. 송신기는 필요 없다.
+
+```powershell
+.\build\Debug\pc-application.exe --gui-preview
+```
+
+- BBox를 클릭하면 해당 Track ID의 Target Set 요청이 발생한다.
+- 영상의 BBox가 없는 부분을 클릭하면 Target Clear 요청이 발생한다.
+- Track ID를 입력하거나 선택한 뒤 Track 버튼으로 요청할 수 있다.
+
+클릭 요청은 디버그 로그의 `TARGET_SET(ID) [GUI mock]`, `TARGET_CLEAR [GUI mock]`으로 확인한다. VS Code 디버거로 Preview를 실행하려면 `.vscode/launch.json`의 `Debug pc-application` 구성에 `"args": ["--gui-preview"]`를 추가한 뒤 F5를 누른다. 영상 수신 시험으로 돌아갈 때는 해당 인수를 제거한다.
+
+## 계측 CSV 사용
+
+Trace 옵션을 생략하면 기록하지 않는다. `--video-trace` / `--trace`는 Frame 요약을 켜며 Packet 상세는 별도 옵션으로 필요한 시험에서만 켠다. 두 출력에는 서로 다른 파일 경로를 사용한다.
+
+최근 256개 Frame의 요약은 메모리에 보관되며 수신기를 닫을 때 저장된다. Packet 상세와 확정된 요약은 250ms 간격으로 저장한다.
+
+| Frame 요약 열 | 의미 |
+| --- | --- |
+| `role`, `frameId` | Sender: Mock 영상 생성 ID. Receiver: 로컬 Frame 전달 ID. `0`은 appsink 전달 기록이 없는 Frame. |
+| `ssrc`, `rtpTimestamp` | 송수신 기록에서 같은 Frame을 찾는 식별값. |
+| `ptsNs`, `jitterPtsNs` | Sender appsrc PTS / Receiver appsink PTS, 그리고 Receiver의 Jitter Buffer 이후 Marker PTS. |
+| `firstSequence`, `lastSequence` | 해당 Frame에서 처음/마지막으로 관측한 Sequence. |
+| `firstRtpNs`, `lastRtpNs`, `markerRtpNs` | Sender payloader 출력 / Receiver Jitter Buffer 이전의 첫·마지막 Packet 및 마지막으로 관측한 Marker 시각. |
+| `acquiredNs` | Mock 영상 생성 완료 시각. |
+| `appsinkNs`, `paintNs` | Decode된 Sample을 가져온 시각, 해당 이미지의 첫 QPainter 그리기 완료 시각. |
+| `displayed` | Receiver에서 실제 Draw했으면 `1`, 관측 기간에 Draw하지 않았으면 `0`. Sender는 빈 칸. |
+| `clockDomain`, `timeUnit` | `local_steady_clock`, `ns`. 같은 장비 내부의 Monotonic 시각끼리만 지연을 계산한다. |
+
+Packet 상세 CSV의 열은 `role,ssrc,rtpTimestamp,sequence,marker,observedMonotonicNs,clockDomain,timeUnit`이다.
+
+매칭되지 않은 값은 빈 칸이다. `displayed=0`은 표시 기록이 없다는 뜻이며, Buffer 폐기나 GUI 표시 생략도 포함한다.
+
+분석 명령과 세 구간의 지표는 [수동 영상 테스트](#수동-영상-테스트)의 6단계에 정리되어 있다. 누락되거나 시간 순서가 역전된 구간은 계산에서 제외한다.
+
+ms 분석은 같은 PC의 Monotonic 시각 차이로 수신 처리 시간을 계산한다. 장비 간 전송 시간은 이 결과에 포함되지 않는다.
+
+## 자동 통합 시험
+
+수동 시험용 수신기와 송신기를 닫고 프로젝트 루트에서 실행한다. CMake와 CTest가 PATH에 있어야 하며, 시험은 별도의 UDP 15000 포트를 사용한다.
 
 ```powershell
 cmake -S . -B build -DBUILD_TESTING=ON
@@ -94,3 +166,17 @@ ctest --test-dir build -C Debug --output-on-failure
 ```
 
 시험은 UDP 15000으로 실제 Mock Sender를 실행하고 영상 크기, FPS, RTP/PTS 대응, 영상 메모리 수명, Dummy Track 제거, Stop/Restart 및 잘못된 Trace 경로 처리를 확인한다. 첫 Draw 중복 방지, 표시 생략, SSRC 분리, Marker 이후 Packet 도착, RTP Timestamp Wrap, 기록 보관 상한도 검사한다. `build/Debug`에 Sender/Receiver 요약·Packet CSV와 GUI 캡처를 남긴다.
+
+`100% tests passed`가 표시되면 통과다. `No tests were found`라면 `BUILD_TESTING=ON`으로 Configure한 뒤 다시 빌드했는지 확인한다.
+
+## 문제가 생겼을 때
+
+| 증상 | 확인 방법 |
+| --- | --- |
+| 실행 파일을 찾을 수 없음 | 터미널의 현재 폴더가 프로젝트 루트인지, Debug Build가 완료됐는지 확인한다. |
+| `cmake` / `ctest` 명령을 찾을 수 없음 | 개발환경의 PATH를 확인한다. 빌드는 VS Code CMake Tools에서도 실행할 수 있다. |
+| `No video`가 계속 표시됨 | 수신기를 먼저 실행했는지, Mock Sender가 아직 송신 중인지 확인한다. 기본 송신 주소는 `127.0.0.1`, 양쪽 기본 영상 포트는 UDP 5000이다. |
+| DLL 또는 GStreamer Plugin 오류 | Configure와 Debug Build를 다시 실행해 Runtime 배치를 완료한다. 실행 파일 옆의 DLL과 `gstreamer-1.0` 폴더가 필요하다. |
+| CSV가 없거나 Header만 있음 | Trace 옵션과 출력 폴더를 확인하고, 수신기를 정상 종료한 뒤 확인한다. 최신 Frame 요약은 실행 중 미확정 상태일 수 있다. |
+| `No finalized frame rows` | 수신기 창을 닫은 뒤 올바른 `receiver.csv`로 분석을 다시 실행한다. |
+| `Missing column` 또는 Sender/Packet CSV 오류 | `-Path`에는 현재 버전의 Receiver Frame 요약 CSV를 지정한다. |
