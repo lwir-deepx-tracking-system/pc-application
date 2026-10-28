@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QLabel>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include "video/VideoReceiver.h"
@@ -90,12 +91,22 @@ private slots:
         QCOMPARE(file.readAll().count("receiver,"), 600);
     }
 
+    void receiveAndRestart_data()
+    {
+        QTest::addColumn<QString>("codecName");
+        QTest::newRow("jpeg") << QString("jpeg");
+        QTest::newRow("h264") << QString("h264");
+    }
+
     void receiveAndRestart()
     {
+        QFETCH(QString, codecName);
+        const auto codec = codecName == "jpeg" ? VideoReceiver::Codec::JPEG : VideoReceiver::Codec::H264;
         const QString outputDir = QCoreApplication::applicationDirPath();
         qputenv("GST_PLUGIN_PATH_1_0", (outputDir + "/gstreamer-1.0").toUtf8());
         VideoReceiver receiver;
         MainWindow window(nullptr, false);
+        window.setVideoCodec(codecName);
         window.show();
         QObject::connect(&receiver, &VideoReceiver::frameReady, &window,
             [&window](const QImage &image, quint64, qint64, quint64 frameId) {
@@ -106,13 +117,14 @@ private slots:
         QSignalSpy frames(&receiver, &VideoReceiver::frameReady);
         QSignalSpy fps(&receiver, &VideoReceiver::fpsChanged);
         QSignalSpy errors(&receiver, &VideoReceiver::errorOccurred);
+        QSignalSpy processing(&receiver, &VideoReceiver::processingTimeChanged);
         const bool started = receiver.start(15000, outputDir + "/receiver-trace.csv", 50,
-                                             outputDir + "/receiver-packets.csv");
+                                             outputDir + "/receiver-packets.csv", codec);
         QVERIFY2(started, errors.isEmpty() ? "Receiver startup failed" : qPrintable(errors.last().first().toString()));
         QProcess sender;
         sender.setProgram(outputDir + "/mock-video-sender");
         sender.setArguments({"--port", "15000", "--frames", "120", "--trace", outputDir + "/sender-trace.csv",
-                             "--packet-trace", outputDir + "/sender-packets.csv"});
+                             "--packet-trace", outputDir + "/sender-packets.csv", "--codec", codecName});
         sender.start();
         QVERIFY(sender.waitForStarted());
         QTRY_VERIFY_WITH_TIMEOUT(frames.count() >= 60, 8000);
@@ -123,9 +135,12 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!fps.isEmpty(), 2000);
         QVERIFY(fps.last().first().toDouble() > 20.0);
         QVERIFY(fps.last().first().toDouble() < 40.0);
+        QVERIFY(!processing.isEmpty());
+        QVERIFY(processing.last().first().toDouble() > 0.0);
+        QVERIFY(processing.last().first().toDouble() < 1000.0);
         QCOMPARE(window.findChild<QComboBox *>("trackCombo")->count(), 0);
         QVERIFY(window.findChild<QLabel *>("videoFps")->text() != "--");
-        window.grab().save(outputDir + "/video-receiver.png");
+        window.grab().save(outputDir + "/video-receiver-" + codecName + ".png");
         window.hide(); // Continued reception without paint must not mean network loss.
         QTRY_VERIFY_WITH_TIMEOUT(sender.state() == QProcess::NotRunning, 6000);
         QCOMPARE(sender.exitCode(), 0);
@@ -182,8 +197,9 @@ private slots:
         QVERIFY(displayed > 20);
         QVERIFY(skipped > 10);
         const int beforeRestart = frames.count();
-        QVERIFY(receiver.start(15000));
-        sender.setArguments({"--port", "15000", "--frames", "30"});
+        QVERIFY(receiver.start(15000, {}, 50, {}, codec));
+        // Allow another IDR after startup loss; H.264 late join is bounded by GOP.
+        sender.setArguments({"--port", "15000", "--frames", "90", "--codec", codecName});
         sender.start();
         QVERIFY(sender.waitForStarted());
         QTRY_VERIFY_WITH_TIMEOUT(frames.count() > beforeRestart + 10, 5000);
@@ -198,6 +214,55 @@ private slots:
         QSignalSpy errors(&receiver, &VideoReceiver::errorOccurred);
         QVERIFY(!receiver.start(15000, "directory-that-does-not-exist/trace.csv"));
         QCOMPARE(errors.count(), 1);
+        receiver.stop();
+    }
+
+    void receiveBoard_data() { receiveAndRestart_data(); }
+
+    void receiveBoard()
+    {
+        if (!qEnvironmentVariableIsSet("LWIR_BOARD_VIDEO_HOST"))
+            QSKIP("Set LWIR_BOARD_VIDEO_HOST to this PC's board-reachable IP for MPP integration");
+        QFETCH(QString, codecName);
+        VideoReceiver receiver;
+        MainWindow window(nullptr, false);
+        window.setVideoCodec(codecName);
+        window.show();
+        connect(&receiver, &VideoReceiver::frameReady, &window,
+            [&window](const QImage &image, quint64, qint64, quint64 id) { window.setDisplayFrame(image, {}, id); });
+        connect(&receiver, &VideoReceiver::fpsChanged, &window, &MainWindow::setVideoFps);
+        connect(&receiver, &VideoReceiver::processingTimeChanged, &window, &MainWindow::setVideoProcessingTime);
+        QSignalSpy frames(&receiver, &VideoReceiver::frameReady);
+        QSignalSpy processing(&receiver, &VideoReceiver::processingTimeChanged);
+        QSignalSpy errors(&receiver, &VideoReceiver::errorOccurred);
+        QVERIFY(receiver.start(5000, {}, 50, {}, codecName == "jpeg"
+            ? VideoReceiver::Codec::JPEG : VideoReceiver::Codec::H264));
+        const QString host = qEnvironmentVariable("LWIR_BOARD_VIDEO_HOST");
+        // Only numeric IPv4 addresses are passed to the remote shell.
+        QVERIFY(QRegularExpression("^[0-9.]+$").match(host).hasMatch());
+        QProcess sender;
+        const bool relay = qEnvironmentVariableIsSet("LWIR_BOARD_VIDEO_RELAY");
+        if (relay) {
+            sender.setProgram("python");
+            sender.setArguments({QFINDTESTDATA("../../tools/mock/video/board_relay.py"), codecName});
+        } else {
+            sender.setProgram("ssh");
+            sender.setArguments({"-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "pi",
+                "/home/orangepi/.cache/lwir-runtime/build/lwir_video_send --synthetic --seconds 5 --codec "
+                    + codecName + " --host " + host});
+        }
+        sender.start();
+        QVERIFY(sender.waitForStarted());
+        QTRY_VERIFY_WITH_TIMEOUT(sender.state() == QProcess::NotRunning, 15000);
+        QCOMPARE(sender.exitCode(), 0);
+        qInfo().noquote() << sender.readAllStandardOutput();
+        qInfo() << "transport:" << (relay ? "SSH relay (functional test only)" : "direct UDP");
+        QCOMPARE(errors.count(), 0);
+        QVERIFY2(frames.count() > 60, "Not enough board frames: check routing and UDP 5000 firewall");
+        QVERIFY(!processing.isEmpty());
+        qInfo() << codecName << "received" << frames.count() << "frames; last average decode+delivery ms:"
+                << processing.last().first().toDouble();
+        window.grab().save(QCoreApplication::applicationDirPath() + "/board-" + codecName + ".png");
         receiver.stop();
     }
 };

@@ -18,7 +18,7 @@ VideoReceiver::~VideoReceiver()
 }
 
 bool VideoReceiver::start(quint16 port, const QString &tracePath, uint latencyMs,
-                          const QString &packetTracePath)
+                          const QString &packetTracePath, Codec codec)
 {
     stop();
     configureGStreamerRuntime();
@@ -34,13 +34,16 @@ bool VideoReceiver::start(quint16 port, const QString &tracePath, uint latencyMs
         return false;
     }
     // These buffering values are PoC settings, not final integration defaults.
+    const bool jpeg = codec == Codec::JPEG;
     const QString description = QString(
-        "udpsrc name=input port=%1 caps=\"application/x-rtp,media=video,encoding-name=JPEG,clock-rate=90000,payload=26\" "
+        "udpsrc name=input port=%1 caps=\"application/x-rtp,media=video,encoding-name=%3,clock-rate=90000,payload=%4\" "
         "! rtpjitterbuffer latency=%2 drop-on-latency=true "
-        "! rtpjpegdepay name=depay ! jpegdec ! videoconvert "
+        "! %5 ! videoconvert "
         "! video/x-raw,format=RGB,width=640,height=480 "
         "! appsink name=frames sync=false max-buffers=1 drop=true wait-on-eos=false")
-        .arg(port).arg(latencyMs);
+        .arg(port).arg(latencyMs).arg(jpeg ? "JPEG" : "H264").arg(jpeg ? 26 : 96)
+        .arg(jpeg ? "rtpjpegdepay name=depay ! jpegdec"
+                  : "rtph264depay name=depay ! h264parse ! avdec_h264 max-threads=1");
     pipeline = gst_parse_launch(description.toUtf8().constData(), &error);
     if (error || !pipeline) {
         const QString message = error ? QString::fromUtf8(error->message) : "Cannot create video pipeline";
@@ -68,6 +71,8 @@ bool VideoReceiver::start(quint16 port, const QString &tracePath, uint latencyMs
         return false;
     }
     fpsFrames = 0;
+    processingNs = 0;
+    processingFrames = 0;
     fpsClock.start();
     timer.start();
     return true;
@@ -108,7 +113,7 @@ GstPadProbeReturn VideoReceiver::inspectRtp(GstPad *, GstPadProbeInfo *info, gpo
             self->trace.record("receiver_rtp", 0, pts, timestamp, gst_rtp_buffer_get_seq(&rtp), ssrc);
             if (GST_CLOCK_TIME_IS_VALID(pts)) {
                 QMutexLocker lock(&self->timestampMutex);
-                self->timestamps[pts] = {ssrc, timestamp};
+                self->timestamps[pts] = {ssrc, timestamp, VideoTrace::nowNs()};
                 while (self->timestamps.size() > 256)
                     self->timestamps.erase(self->timestamps.begin());
             }
@@ -187,8 +192,10 @@ void VideoReceiver::poll()
                 QMutexLocker lock(&timestampMutex);
                 const auto found = timestamps.find(pts);
                 if (found != timestamps.end()) {
-                    ssrc = found->second.first;
-                    rtpTimestamp = found->second.second;
+                    ssrc = found->second.ssrc;
+                    rtpTimestamp = found->second.rtp;
+                    processingNs += VideoTrace::nowNs() - found->second.receivedNs;
+                    ++processingFrames;
                     timestamps.erase(timestamps.begin(), std::next(found));
                 }
             }
@@ -202,7 +209,11 @@ void VideoReceiver::poll()
     }
     if (fpsClock.elapsed() >= 1000) {
         emit fpsChanged(fpsFrames * 1000.0 / fpsClock.elapsed());
+        if (processingFrames)
+            emit processingTimeChanged(double(processingNs) / processingFrames / 1e6);
         fpsFrames = 0;
+        processingNs = 0;
+        processingFrames = 0;
         fpsClock.restart();
     }
 }

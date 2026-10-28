@@ -46,6 +46,7 @@ int main(int argc, char **argv)
     parser.addHelpOption();
     parser.addOption({"host", "Destination IP.", "address", "127.0.0.1"});
     parser.addOption({"port", "Destination UDP port.", "port", "5000"});
+    parser.addOption({"codec", "Codec: jpeg or h264 (software test sender).", "codec", "jpeg"});
     parser.addOption({"frames", "Number of frames; 0 sends until interrupted.", "count", "0"});
     parser.addOption({"trace", "Frame summary CSV output.", "path"});
     parser.addOption({"packet-trace", "Optional RTP packet CSV output.", "path"});
@@ -54,7 +55,8 @@ int main(int argc, char **argv)
     bool countOk = false;
     const uint port = parser.value("port").toUInt(&portOk);
     const uint frameLimit = parser.value("frames").toUInt(&countOk);
-    if (!portOk || !port || port > 65535 || !countOk)
+    const QString codec = parser.value("codec");
+    if (!portOk || !port || port > 65535 || !countOk || (codec != "jpeg" && codec != "h264"))
         parser.showHelp(1);
     configureGStreamerRuntime();
     GError *error = nullptr;
@@ -68,12 +70,16 @@ int main(int argc, char **argv)
         qCritical() << "Cannot open trace file";
         return 1;
     }
-    GstElement *pipeline = gst_parse_launch(
+    const QString encoderPath = codec == "jpeg"
+        ? "jpegenc quality=80 ! jpegparse ! rtpjpegpay name=pay pt=26"
+        : "x264enc tune=zerolatency speed-preset=ultrafast bitrate=3000 key-int-max=30 bframes=0 byte-stream=true "
+          "! h264parse ! rtph264pay name=pay pt=96 config-interval=-1";
+    const QString description = QString(
         "appsrc name=source is-live=true format=time block=false "
         "caps=\"video/x-raw,format=RGB,width=640,height=480,framerate=30/1\" "
-        "! videoconvert ! video/x-raw,format=I420 ! jpegenc quality=80 ! jpegparse "
-        "! rtpjpegpay name=pay pt=26 mtu=1200 timestamp-offset=0 seqnum-offset=0 "
-        "! udpsink name=output sync=true async=false", &error);
+        "! videoconvert ! video/x-raw,format=I420 ! %1 mtu=1200 timestamp-offset=0 seqnum-offset=0 "
+        "! udpsink name=output sync=true async=false").arg(encoderPath);
+    GstElement *pipeline = gst_parse_launch(description.toUtf8().constData(), &error);
     if (error || !pipeline) {
         qCritical() << (error ? error->message : "Cannot create sender");
         g_clear_error(&error);
@@ -157,7 +163,7 @@ int main(int argc, char **argv)
     } else {
         clock.start();
         timer.start();
-        qInfo() << "Sending RTP/JPEG to" << host << port;
+        qInfo() << "Sending RTP" << codec << "to" << host << port;
         app.exec();
     }
     timer.stop();

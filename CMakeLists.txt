@@ -46,7 +46,7 @@ function(deploy_runtime target)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${GSTREAMER_ROOT}/libexec/gstreamer-1.0/gst-plugin-scanner.exe"
                 "$<TARGET_FILE_DIR:${target}>" VERBATIM)
-        foreach(plugin coreelements app udp rtp rtpmanager jpeg jpegformat videoconvertscale)
+        foreach(plugin coreelements app udp rtp rtpmanager jpeg jpegformat videoconvertscale videoparsersbad libav x264)
             add_custom_command(TARGET ${target} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${GSTREAMER_ROOT}/lib/gstreamer-1.0/gst${plugin}.dll"
@@ -82,6 +82,7 @@ if(BUILD_TESTING)
     find_package(Qt6 REQUIRED COMPONENTS Test)
     qt_add_executable(video-integration-test tests/integration/VideoReceiverTest.cpp
         src/ui/MainWindow.cpp src/ui/MainWindow.h src/ui/VideoWidget.cpp src/ui/VideoWidget.h)
+    set_target_properties(video-integration-test PROPERTIES WIN32_EXECUTABLE FALSE)
     target_link_libraries(video-integration-test PRIVATE video-receiver Qt6::Widgets Qt6::Test)
     deploy_runtime(video-integration-test)
     add_test(NAME video-integration COMMAND video-integration-test -o -,txt)

@@ -30,6 +30,42 @@ Windows 빌드 시 Qt/GStreamer DLL, 플러그인, Plugin Scanner가 실행 파�
 
 기본 수신 포트는 RTP/JPEG UDP 5000이다. 송신기가 없으면 `No video`가 표시된다.
 
+JPEG/H.264는 오른쪽 DIAGNOSTICS의 코덱 선택 또는 실행 옵션으로 바꾼다. 보드 송신 설정도 같은 코덱이어야 한다. JPEG는 RTP payload 26, H.264는 96이며 영상 포트는 둘 다 5000이다. 코덱을 바꾸면 수신 파이프라인을 재시작한다. `--video-trace`를 사용 중이면 해당 파일도 다시 열린다.
+
+```powershell
+.\build\Debug\pc-application.exe --video-codec jpeg
+.\build\Debug\pc-application.exe --video-codec h264
+```
+
+`Decode + delivery`는 최근 약 1초 동안 처리한 프레임의 **평균 처리시간(ms)** 이다. Jitter Buffer를 지난 마지막 RTP 조각부터 디코딩·RGB 변환·앱의 이미지 복사 완료까지 측정하며, 최대 약 5ms의 polling 대기도 포함한다. 네트워크 전송시간과 실제 화면 paint 시간은 포함하지 않는다. 프레임별 타임스탬프 CSV를 켤 필요는 없다.
+
+두 코덱 모두 같은 Jitter Buffer(기본 50ms)와 최신 이미지 1개 정책을 사용한다. H.264는 `h264parse`와 `avdec_h264`를 사용하며, Windows 배포에 필요한 `videoparsersbad`, `libav` 플러그인도 복사한다. H.264는 연결 중간에 수신을 시작하면 다음 IDR까지 기다릴 수 있다.
+
+PC 내부 시험에서 H.264 Mock Sender는 다음과 같이 실행한다. Mock은 소프트웨어 인코딩이므로 보드 하드웨어 성능 비교에는 사용하지 않는다.
+
+```powershell
+.\build\Debug\mock-video-sender.exe --codec h264 --frames 300
+```
+
+실제 비교는 보드의 `/home/orangepi/lwir-work/runtime-jpeg`에서 빌드한 송신 도구로 같은 RAW16 파일 또는 16비트 PNG 디렉터리를 재생한다. 다음 명령은 보드 SSH 터미널에서 각각 실행하며, PC의 코덱 선택도 맞춘다.
+
+```bash
+SEND=/home/orangepi/.cache/lwir-runtime/build/lwir_video_send
+$SEND --input /path/to/frames --codec jpeg --host <PC_IP> --seconds 30 --output /tmp/jpeg.csv
+$SEND --input /path/to/frames --codec h264 --host <PC_IP> --seconds 30 --output /tmp/h264.csv
+```
+
+보드 CSV는 전처리·인코딩/RTP의 평균 ms, CPU 사용률, 출력 FPS, RTP Mbps를 기록한다. 품질·비트레이트·표시 범위와 측정 구간의 상세 설명은 보드의 `tools/VIDEO_COMPARE.md`에 있다.
+
+보드 연결을 포함하는 선택 시험은 다음과 같다. 기본 자동 시험에는 보드가 필요하지 않다.
+
+```powershell
+$env:LWIR_BOARD_VIDEO_HOST = "<보드에서 접근 가능한 PC IPv4>"
+.\build\Debug\video-integration-test.exe receiveBoard -o build/board-test.txt,txt
+```
+
+Windows UDP 수신이 차단된 환경에서는 `$env:LWIR_BOARD_VIDEO_RELAY = "1"`로 SSH 경유 기능 검증을 할 수 있다. 이 경로는 Python과 SSH alias `pi`, 보드의 `/home/orangepi/.cache/lwir-runtime/build/lwir_video_send`를 사용한다. **SSH 경유 결과를 이더넷 성능 비교에 사용하지 않는다.** 직접 UDP 시험에는 해당 환경변수를 제거하고 PC UDP 5000의 수신 허용이 필요하다.
+
 아래 절차는 같은 PC에서 Mock 영상을 송수신하고 수신 처리 시간을 측정한다.
 
 Mock Sender는 움직이는 테스트 영상을 `appsrc → videoconvert → I420 → jpegenc → jpegparse → rtpjpegpay → udpsink`로 전송한다. `--frames 300`을 지정하면 300 Frame 후 종료하며 기본값은 계속 송신이다. 다른 PC로 송신하려면 `--host 192.168.10.1`을 지정한다.
