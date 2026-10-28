@@ -17,6 +17,8 @@ public:
     void setVideoFps(double fps);
     void setVideoProcessingTime(double milliseconds);
     void setVideoCodec(const QString &codec);
+    void setMetadataFps(double fps);
+    void setTrackCount(int count);
 
 signals:
     void targetSetRequested(quint32 trackId);
@@ -35,4 +37,6 @@ private:
     QLabel *videoFpsLabel;
     QLabel *videoProcessingLabel;
     QComboBox *videoCodecCombo;
+    QLabel *metadataFpsLabel;
+    QLabel *trackCountLabel;
 };

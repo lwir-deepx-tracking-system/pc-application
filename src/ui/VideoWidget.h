@@ -4,12 +4,7 @@
 #include <QRectF>
 #include <QVector>
 #include <QWidget>
-
-struct TrackBox
-{
-    quint32 trackId;
-    QRectF bbox;
-};
+#include "metadata/TrackingMetadata.h"
 
 class VideoWidget : public QWidget
 {

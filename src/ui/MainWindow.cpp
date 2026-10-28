@@ -146,9 +146,12 @@ MainWindow::MainWindow(QWidget *parent, bool dummyPreview) : QMainWindow(parent)
         videoProcessingLabel->setText("--");
         emit videoCodecChanged(videoCodecCombo->currentData().toString());
     });
-    for (const auto &name : {"Metadata FPS", "Metadata Loss", "Video Missing",
-                             "Sync Miss", "Detection", "Track Count"})
+    metadataFpsLabel = addValueRow(diagnosticLayout, "Metadata FPS", "--");
+    metadataFpsLabel->setObjectName("metadataFps");
+    for (const auto &name : {"Metadata Loss", "Video Missing", "Sync Miss", "Detection"})
         addValueRow(diagnosticLayout, name, "--");
+    trackCountLabel = addValueRow(diagnosticLayout, "Track Count", "--");
+    trackCountLabel->setObjectName("trackCount");
     panelLayout->addWidget(diagnosticGroup);
 
     connect(trackCombo, &QComboBox::editTextChanged, this, [this] {
@@ -182,6 +185,16 @@ void MainWindow::setVideoProcessingTime(double milliseconds)
 void MainWindow::setVideoCodec(const QString &codec)
 {
     videoCodecCombo->setCurrentIndex(videoCodecCombo->findData(codec));
+}
+
+void MainWindow::setMetadataFps(double fps)
+{
+    metadataFpsLabel->setText(QString::number(fps, 'f', 1));
+}
+
+void MainWindow::setTrackCount(int count)
+{
+    trackCountLabel->setText(QString::number(count));
 }
 
 void MainWindow::setDisplayFrame(const QImage &image, const QVector<TrackBox> &tracks, quint64 frameId)

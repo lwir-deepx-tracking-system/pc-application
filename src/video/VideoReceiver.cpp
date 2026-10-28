@@ -73,6 +73,7 @@ bool VideoReceiver::start(quint16 port, const QString &tracePath, uint latencyMs
     fpsFrames = 0;
     processingNs = 0;
     processingFrames = 0;
+    streamSsrc = -1;
     fpsClock.start();
     timer.start();
     return true;
@@ -200,6 +201,10 @@ void VideoReceiver::poll()
                 }
             }
             const quint64 frameId = ++deliveryId;
+            if (ssrc >= 0) {
+                if (streamSsrc >= 0 && streamSsrc != ssrc) emit streamRestarted();
+                streamSsrc = ssrc;
+            }
             trace.record("appsink", frameId, pts, rtpTimestamp, -1, ssrc, false, acquiredNs);
             gst_video_frame_unmap(&frame);
             ++fpsFrames;

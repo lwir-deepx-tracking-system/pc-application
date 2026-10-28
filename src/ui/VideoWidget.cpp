@@ -23,8 +23,9 @@ void VideoWidget::setDisplayFrame(const QImage &newImage, const QVector<TrackBox
 
 QRectF VideoWidget::videoRect() const
 {
-    const qreal scale = qMin(width() / 640.0, height() / 480.0);
-    const QSizeF size(640.0 * scale, 480.0 * scale);
+    const QSize source = image.isNull() ? QSize(640, 480) : image.size();
+    const qreal scale = qMin(qreal(width()) / source.width(), qreal(height()) / source.height());
+    const QSizeF size(source.width() * scale, source.height() * scale);
     return QRectF(QPointF((width() - size.width()) / 2.0,
                          (height() - size.height()) / 2.0), size);
 }
@@ -43,7 +44,7 @@ void VideoWidget::paintEvent(QPaintEvent *)
     painter.save();
     painter.setClipRect(fitted);
     painter.translate(fitted.topLeft());
-    const qreal scale = fitted.width() / 640.0;
+    const qreal scale = fitted.width() / image.width();
     painter.scale(scale, scale);
     QPen pen(QColor("#64e5c0"), 2.0);
     pen.setCosmetic(true);
@@ -80,7 +81,7 @@ void VideoWidget::mousePressEvent(QMouseEvent *event)
     const QRectF fitted = videoRect();
     if (!fitted.contains(event->position()))
         return;
-    const QPointF original = (event->position() - fitted.topLeft()) / (fitted.width() / 640.0);
+    const QPointF original = (event->position() - fitted.topLeft()) / (fitted.width() / image.width());
     quint32 hitId = 0;
     int hitCount = 0;
     for (const auto &track : tracks) {

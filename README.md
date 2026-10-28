@@ -30,6 +30,24 @@ Windows 빌드 시 Qt/GStreamer DLL, 플러그인, Plugin Scanner가 실행 파�
 
 기본 수신 포트는 RTP/JPEG UDP 5000이다. 송신기가 없으면 `No video`가 표시된다.
 
+### 추적 메타데이터와 BBox
+
+GUI는 기본 UDP **5001**에서 보드 runtime의 **LWIM v2** 메타데이터를 수신한다. 보드 `gui.metadata.enabled`를 `true`, `gui.metadata.host`를 PC IP, `gui.metadata.port`를 `5001`로 맞춘다. 영상 UDP 5000과 메타데이터 UDP 5001 모두 PC에 도달해야 한다. 수신 포트는 `--metadata-port`로 변경할 수 있다.
+
+BBox는 원본 영상의 **왼쪽 위 x, y, width, height** 좌표다. 영상과 박스에 같은 배율과 중앙 여백을 적용하므로 창 크기·화면 배율을 바꿔도 위치가 맞는다. 박스 클릭도 같은 변환을 역으로 적용한다.
+
+영상과 메타데이터는 RTP timestamp로 대응한다. 영상은 대기 없이 표시하며, 늦게 도착한 메타데이터는 현재 표시 중인 timestamp가 같을 때만 박스를 갱신한다. 다른 프레임의 박스는 재사용하지 않으며, 캐시는 최대 128개·500ms로 제한한다. 원본 해상도가 다르거나 패킷 형식이 잘못된 경우 박스를 적용하지 않는다. 수신 stream 변경·코덱 변경 시 대응 상태를 초기화한다.
+
+`Metadata FPS`는 유효 패킷 수신율이며, `Track Count`는 현재 영상에 대응된 표시 박스 수다. GUI는 들어온 메타데이터만 사용하며, 검출 결과를 자체 생성하지 않는다. 대상 제어 명령 송신은 이번 수신·표시 기능과 별개다.
+
+PC 내부에서 이동하는 합성 영상과 박스를 함께 확인하려면 GUI를 실행하고 별도 터미널에서 다음 명령을 실행한다. H.264도 GUI와 송신기의 코덱을 같이 맞추면 된다.
+
+```powershell
+.\build\Debug\mock-video-sender.exe --codec jpeg --metadata-port 5001 --frames 300
+```
+
+이 Mock의 박스는 시험용 주석이며 NPU 검출 결과가 아니다. 자동 시험은 실제 UDP 수신, JPEG/H.264의 프레임 대응, 잘못된 패킷·지연·만료 처리, 창 크기·원본 해상도·DPI에 따른 박스 렌더링 및 클릭 위치를 확인한다.
+
 JPEG/H.264는 오른쪽 DIAGNOSTICS의 코덱 선택 또는 실행 옵션으로 바꾼다. 보드 송신 설정도 같은 코덱이어야 한다. JPEG는 RTP payload 26, H.264는 96이며 영상 포트는 둘 다 5000이다. 코덱을 바꾸면 수신 파이프라인을 재시작한다. `--video-trace`를 사용 중이면 해당 파일도 다시 열린다.
 
 ```powershell

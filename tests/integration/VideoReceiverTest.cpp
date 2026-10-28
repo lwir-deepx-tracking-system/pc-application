@@ -8,11 +8,170 @@
 #include <QTemporaryDir>
 #include "video/VideoReceiver.h"
 #include "ui/MainWindow.h"
+#include "metadata/MetadataReceiver.h"
+#include "metadata/FrameSynchronizer.h"
 
 class VideoReceiverTest : public QObject
 {
     Q_OBJECT
 private slots:
+    void decodeRuntimeMetadata()
+    {
+        // Independent wire fixture: frame 42, RTP 9000, ID 7, xywh 100/50/200/100.
+        const auto packet = QByteArray::fromHex(
+            "4c57494d00020001000000000000002a00002328000000000001e24000000280000001e0"
+            "0000000100000007000000013f40000042c80000424800004348000042c80000");
+        TrackingMetadata decoded;
+        QVERIFY(decodeTrackingMetadata(packet, decoded));
+        QCOMPARE(decoded.frameId, quint64(42));
+        QCOMPARE(decoded.rtpTimestamp, quint32(9000));
+        QCOMPARE(decoded.guiStartedUs, quint64(123456));
+        QCOMPARE(decoded.imageSize, QSize(640, 480));
+        QCOMPARE(decoded.tracks.size(), 1);
+        QCOMPARE(decoded.tracks[0].trackId, quint32(7));
+        QCOMPARE(decoded.tracks[0].bbox, QRectF(100, 50, 200, 100));
+        QVERIFY(!decodeTrackingMetadata(packet.left(39), decoded));
+        QVERIFY(!decodeTrackingMetadata(packet.left(67), decoded));
+        QVERIFY(!decodeTrackingMetadata(packet + 'x', decoded));
+        auto bad = packet;
+        bad[5] = 1; // Old/incompatible version.
+        QVERIFY(!decodeTrackingMetadata(bad, decoded));
+        bad = packet;
+        bad.replace(52, 4, QByteArray::fromHex("7fc00000")); // NaN x.
+        QVERIFY(!decodeTrackingMetadata(bad, decoded));
+        QCOMPARE(decoded.tracks[0].bbox, QRectF(100, 50, 200, 100));
+        bad = packet;
+        bad.replace(60, 4, QByteArray::fromHex("bf800000")); // Negative width.
+        QVERIFY(!decodeTrackingMetadata(bad, decoded));
+        auto empty = packet.left(40);
+        empty.replace(36, 4, QByteArray(4, '\0'));
+        QVERIFY(decodeTrackingMetadata(empty, decoded));
+        QVERIFY(decoded.tracks.isEmpty());
+    }
+
+    void receiveMetadataDatagram()
+    {
+        MetadataReceiver receiver;
+        QSignalSpy frames(&receiver, &MetadataReceiver::frameReady);
+        const QString boardHost = qEnvironmentVariable("LWIR_BOARD_METADATA_HOST");
+        const quint16 port = boardHost.isEmpty() ? 15001 : 5001;
+        QVERIFY(receiver.start(port));
+        QUdpSocket sender;
+        const auto packet = QByteArray::fromHex(
+            "4c57494d00020001000000000000002a00002328000000000001e24000000280000001e0"
+            "0000000100000007000000013f40000042c80000424800004348000042c80000");
+        if (boardHost.isEmpty()) {
+            QCOMPARE(sender.writeDatagram(packet, QHostAddress::LocalHost, port), qint64(packet.size()));
+        } else {
+            QVERIFY(QRegularExpression("^[0-9.]+$").match(boardHost).hasMatch());
+            // Optional live compatibility check with the runtime's C++ encoder.
+            QProcess board;
+            board.setProgram("ssh");
+            board.setArguments({"-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "pi",
+                "/home/orangepi/.cache/lwir-runtime/metadata-probe", boardHost, QString::number(port)});
+            board.start();
+            QVERIFY(board.waitForFinished(10000));
+            QCOMPARE(board.exitCode(), 0);
+        }
+        QTRY_COMPARE(frames.count(), 1);
+        const auto decoded = qvariant_cast<TrackingMetadata>(frames[0][0]);
+        QCOMPARE(decoded.tracks[0].bbox, QRectF(100, 50, 200, 100));
+        sender.writeDatagram("invalid", QHostAddress::LocalHost, port);
+        QTest::qWait(30);
+        QCOMPARE(frames.count(), 1);
+        receiver.stop();
+    }
+
+    void synchronizeMetadata()
+    {
+        FrameSynchronizer sync;
+        QVector<TrackBox> shown;
+        quint64 delivered = 0;
+        connect(&sync, &FrameSynchronizer::frameReady, this,
+            [&](const QImage &, const QVector<TrackBox> &tracks, quint64 id) { shown = tracks; delivered = id; });
+        QImage image(640, 480, QImage::Format_RGB888);
+        image.fill(Qt::gray);
+        TrackingMetadata data;
+        data.frameId = 42;
+        data.rtpTimestamp = 9000;
+        data.imageSize = image.size();
+        data.tracks = {{7, QRectF(100, 50, 200, 100)}};
+        sync.submitVideo(image, 9000, 17);
+        QVERIFY(shown.isEmpty());
+        sync.submitMetadata(data); // Late packet for the current frame.
+        QCOMPARE(shown.size(), 1);
+        QCOMPARE(delivered, quint64(17)); // Preserve PC trace ID.
+        sync.submitVideo(image, 12000, 18);
+        QVERIFY(shown.isEmpty()); // Never carry boxes to an unrelated image.
+        sync.submitMetadata(data);
+        QVERIFY(shown.isEmpty());
+        data.rtpTimestamp = 0xffffff00;
+        sync.submitMetadata(data); // Early packet, including RTP wrap.
+        sync.submitVideo(image, 0xffffff00, 19);
+        QCOMPARE(shown.size(), 1);
+        sync.submitVideo(image, 0, 20);
+        QVERIFY(shown.isEmpty());
+        data.rtpTimestamp = 0;
+        data.imageSize = QSize(320, 240);
+        sync.submitMetadata(data);
+        QVERIFY(shown.isEmpty()); // Wrong source coordinate system.
+        data.imageSize = image.size();
+        sync.submitMetadata(data);
+        QCOMPARE(shown.size(), 1);
+        QTRY_VERIFY_WITH_TIMEOUT(shown.isEmpty(), 1000); // Expire stalled overlays.
+        sync.submitMetadata(data);
+        QCOMPARE(shown.size(), 1);
+        data.tracks.clear();
+        sync.submitMetadata(data);
+        QVERIFY(shown.isEmpty());
+        sync.clear();
+    }
+
+    void resizeBoundingBoxes_data()
+    {
+        QTest::addColumn<QSize>("widgetSize");
+        QTest::addColumn<QSize>("sourceSize");
+        QTest::newRow("small") << QSize(320, 240) << QSize(640, 480);
+        QTest::newRow("wide-letterbox") << QSize(1280, 720) << QSize(640, 480);
+        QTest::newRow("tall-letterbox") << QSize(640, 800) << QSize(640, 480);
+        QTest::newRow("different-source-size") << QSize(960, 640) << QSize(800, 600);
+    }
+
+    void resizeBoundingBoxes()
+    {
+        QFETCH(QSize, widgetSize);
+        QFETCH(QSize, sourceSize);
+        VideoWidget widget;
+        widget.resize(widgetSize);
+        QImage source(sourceSize, QImage::Format_RGB888);
+        source.fill(Qt::gray);
+        widget.setDisplayFrame(source, {{7, QRectF(100, 50, 200, 100)}}, 1);
+        widget.show();
+        QTest::qWait(30);
+        const auto rect = widget.videoRect();
+        const double scale = rect.width() / sourceSize.width();
+        QSignalSpy selected(&widget, &VideoWidget::targetSetRequested);
+        QSignalSpy cleared(&widget, &VideoWidget::targetClearRequested);
+        QTest::mouseClick(&widget, Qt::LeftButton, Qt::NoModifier,
+            (rect.topLeft() + QPointF(200, 100) * scale).toPoint());
+        QCOMPARE(selected.count(), 1);
+        QCOMPARE(selected[0][0].toUInt(), quint32(7));
+        if (rect.x() > 10 || rect.y() > 10) {
+            QTest::mouseClick(&widget, Qt::LeftButton, Qt::NoModifier, QPoint(2, 2));
+            QCOMPARE(cleared.count(), 0); // Padding is not part of the source image.
+        }
+        const auto rendered = widget.grab().toImage();
+        // QWidget positions are logical pixels; the screenshot stores physical pixels.
+        const auto border = ((rect.topLeft() + QPointF(250, 50) * scale) * rendered.devicePixelRatio()).toPoint();
+        bool foundBorder = false;
+        for (int y = border.y() - 2; y <= border.y() + 2; ++y)
+            for (int x = border.x() - 2; x <= border.x() + 2; ++x) {
+                const auto color = rendered.pixelColor(x, y);
+                if (color.green() > color.red() + 50 && color.blue() > color.red()) foundBorder = true;
+            }
+        QVERIFY2(foundBorder, "Rendered xywh border does not follow image scale/padding");
+    }
+
     void paintTracksOnlyLatestFrame()
     {
         VideoWidget widget;
@@ -89,6 +248,63 @@ private slots:
         QFile file(path);
         QVERIFY(file.open(QIODevice::ReadOnly));
         QCOMPARE(file.readAll().count("receiver,"), 600);
+    }
+
+    void receiveBoxes_data() { receiveAndRestart_data(); }
+
+    void receiveBoxes()
+    {
+        QFETCH(QString, codecName);
+        const auto codec = codecName == "jpeg" ? VideoReceiver::Codec::JPEG : VideoReceiver::Codec::H264;
+        VideoReceiver video;
+        MetadataReceiver metadata;
+        FrameSynchronizer sync;
+        MainWindow window(nullptr, false);
+        window.setVideoCodec(codecName);
+        window.show();
+        qint64 currentTimestamp = -1;
+        int matched = 0;
+        bool wrongBox = false;
+        connect(&video, &VideoReceiver::frameReady, &sync,
+            [&](const QImage &image, quint64, qint64 timestamp, quint64 id) {
+                currentTimestamp = timestamp;
+                sync.submitVideo(image, timestamp, id);
+            });
+        connect(&metadata, &MetadataReceiver::frameReady, &sync, &FrameSynchronizer::submitMetadata);
+        connect(&sync, &FrameSynchronizer::frameReady, &window,
+            [&](const QImage &image, const QVector<TrackBox> &tracks, quint64 id) {
+                window.setDisplayFrame(image, tracks, id);
+                if (!tracks.isEmpty()) {
+                    ++matched;
+                    const QRectF expected((quint32(currentTimestamp) / 3000 * 4) % 560, 200, 80, 80);
+                    if (tracks.size() != 1 || tracks[0].trackId != 7 || tracks[0].bbox != expected) wrongBox = true;
+                }
+            });
+        connect(&metadata, &MetadataReceiver::fpsChanged, &window, &MainWindow::setMetadataFps);
+        connect(&sync, &FrameSynchronizer::trackCountChanged, &window, &MainWindow::setTrackCount);
+        QSignalSpy videoErrors(&video, &VideoReceiver::errorOccurred);
+        QSignalSpy metadataErrors(&metadata, &MetadataReceiver::errorOccurred);
+        QVERIFY(metadata.start(15003));
+        QVERIFY(video.start(15002, {}, 50, {}, codec));
+        QProcess sender;
+        const auto outputDir = QCoreApplication::applicationDirPath();
+        sender.setProgram(outputDir + "/mock-video-sender");
+        sender.setArguments({"--port", "15002", "--metadata-port", "15003", "--frames", "90", "--codec", codecName});
+        sender.start();
+        QVERIFY(sender.waitForStarted());
+        QTRY_VERIFY_WITH_TIMEOUT(matched > 30, 8000);
+        QVERIFY2(!wrongBox, "Box xywh was matched to the wrong RTP frame");
+        QCOMPARE(window.findChild<QComboBox *>("trackCombo")->count(), 1);
+        QCOMPARE(window.findChild<QLabel *>("trackCount")->text(), QString("1"));
+        QTRY_VERIFY(window.findChild<QLabel *>("metadataFps")->text() != "--");
+        window.grab().save(outputDir + "/metadata-" + codecName + ".png");
+        QTRY_VERIFY_WITH_TIMEOUT(sender.state() == QProcess::NotRunning, 6000);
+        QCOMPARE(sender.exitCode(), 0);
+        QVERIFY(!wrongBox);
+        QCOMPARE(videoErrors.count(), 0);
+        QCOMPARE(metadataErrors.count(), 0);
+        video.stop();
+        metadata.stop();
     }
 
     void receiveAndRestart_data()

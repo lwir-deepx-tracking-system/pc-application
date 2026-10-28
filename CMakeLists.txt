@@ -32,6 +32,13 @@ qt_add_library(video-receiver STATIC src/video/VideoReceiver.cpp src/video/Video
 target_include_directories(video-receiver PUBLIC src)
 target_link_libraries(video-receiver PUBLIC Qt6::Gui PkgConfig::GSTREAMER)
 
+qt_add_library(metadata-receiver STATIC
+    src/metadata/TrackingMetadata.cpp src/metadata/TrackingMetadata.h
+    src/metadata/MetadataReceiver.cpp src/metadata/MetadataReceiver.h
+    src/metadata/FrameSynchronizer.cpp src/metadata/FrameSynchronizer.h)
+target_include_directories(metadata-receiver PUBLIC src)
+target_link_libraries(metadata-receiver PUBLIC Qt6::Gui Qt6::Network)
+
 function(deploy_runtime target)
     if(WIN32)
         add_custom_command(TARGET ${target} POST_BUILD
@@ -68,12 +75,13 @@ target_link_libraries(pc-application
         Qt6::Widgets
         Qt6::Network
         video-receiver
+        metadata-receiver
 )
 
 deploy_runtime(pc-application)
 
 qt_add_executable(mock-video-sender tools/mock/video/main.cpp)
-target_link_libraries(mock-video-sender PRIVATE video-receiver)
+target_link_libraries(mock-video-sender PRIVATE video-receiver Qt6::Network)
 deploy_runtime(mock-video-sender)
 
 option(BUILD_TESTING "Build application tests" OFF)
@@ -83,7 +91,7 @@ if(BUILD_TESTING)
     qt_add_executable(video-integration-test tests/integration/VideoReceiverTest.cpp
         src/ui/MainWindow.cpp src/ui/MainWindow.h src/ui/VideoWidget.cpp src/ui/VideoWidget.h)
     set_target_properties(video-integration-test PROPERTIES WIN32_EXECUTABLE FALSE)
-    target_link_libraries(video-integration-test PRIVATE video-receiver Qt6::Widgets Qt6::Test)
+    target_link_libraries(video-integration-test PRIVATE video-receiver metadata-receiver Qt6::Widgets Qt6::Test)
     deploy_runtime(video-integration-test)
     add_test(NAME video-integration COMMAND video-integration-test -o -,txt)
 endif()

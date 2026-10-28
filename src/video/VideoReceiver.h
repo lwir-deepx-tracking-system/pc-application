@@ -26,6 +26,7 @@ signals:
     void fpsChanged(double fps);
     // Depayloader's complete-frame arrival to owned QImage, including poll wait.
     void processingTimeChanged(double milliseconds);
+    void streamRestarted();
     void errorOccurred(const QString &message);
 
 private:
@@ -41,6 +42,7 @@ private:
     quint64 fpsFrames = 0;
     qint64 processingNs = 0;
     quint64 processingFrames = 0;
+    qint64 streamSsrc = -1;
     quint64 deliveryId = 0; // Never reset across receiver restarts.
     VideoTrace trace;
     QMutex timestampMutex;
