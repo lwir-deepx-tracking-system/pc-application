@@ -130,22 +130,13 @@ MainWindow::MainWindow(QWidget *parent, bool dummyPreview) : QMainWindow(parent)
     auto *diagnosticGroup = new QGroupBox("DIAGNOSTICS");
     auto *diagnosticLayout = new QVBoxLayout(diagnosticGroup);
     diagnosticLayout->setSpacing(14);
-    videoCodecCombo = new QComboBox;
-    videoCodecCombo->setObjectName("videoCodec");
-    videoCodecCombo->addItem("JPEG", "jpeg");
-    videoCodecCombo->addItem("H.264", "h264");
-    videoCodecCombo->setToolTip("Receive codec; the board sender must use the same codec.");
-    diagnosticLayout->addWidget(videoCodecCombo);
+    videoCodecLabel = addValueRow(diagnosticLayout, "Video codec", "--");
+    videoCodecLabel->setObjectName("videoCodec");
     videoFpsLabel = addValueRow(diagnosticLayout, "Video FPS", "--");
     videoFpsLabel->setObjectName("videoFps");
     videoProcessingLabel = addValueRow(diagnosticLayout, "Decode + delivery", "--");
     videoProcessingLabel->setObjectName("videoProcessingMs");
     videoProcessingLabel->setToolTip("Average ms: complete RTP frame after jitter buffer to owned image; includes polling wait. Excludes network and paint.");
-    connect(videoCodecCombo, &QComboBox::currentIndexChanged, this, [this] {
-        videoFpsLabel->setText("--");
-        videoProcessingLabel->setText("--");
-        emit videoCodecChanged(videoCodecCombo->currentData().toString());
-    });
     metadataFpsLabel = addValueRow(diagnosticLayout, "Metadata FPS", "--");
     metadataFpsLabel->setObjectName("metadataFps");
     for (const auto &name : {"Metadata Loss", "Video Missing", "Sync Miss", "Detection"})
@@ -182,9 +173,9 @@ void MainWindow::setVideoProcessingTime(double milliseconds)
     videoProcessingLabel->setText(QString::number(milliseconds, 'f', 2) + " ms");
 }
 
-void MainWindow::setVideoCodec(const QString &codec)
+void MainWindow::setVideoCodec(VideoCodec codec)
 {
-    videoCodecCombo->setCurrentIndex(videoCodecCombo->findData(codec));
+    videoCodecLabel->setText(codec == VideoCodec::JPEG ? "JPEG" : "H.264");
 }
 
 void MainWindow::setMetadataFps(double fps)

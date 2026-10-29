@@ -7,13 +7,14 @@
 #include <QTimer>
 #include <map>
 #include "VideoTrace.h"
+#include "VideoCodec.h"
 #include <gst/gst.h>
 
 class VideoReceiver : public QObject
 {
     Q_OBJECT
 public:
-    enum class Codec { JPEG, H264 };
+    using Codec = VideoCodec;
     explicit VideoReceiver(QObject *parent = nullptr);
     ~VideoReceiver() override;
     bool start(quint16 port = 5000, const QString &tracePath = {}, uint latencyMs = 50,

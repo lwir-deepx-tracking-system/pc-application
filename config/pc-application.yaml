@@ -1,0 +1,2 @@
+video:
+  codec: h264  # h264 or jpeg; must match the board sender.

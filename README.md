@@ -13,6 +13,7 @@
 - CMake 3.25 이상, C++20
 - Qt 6 Widgets/Network (Windows: MSVC x64 Kit)
 - GStreamer 1.22 이상 Runtime + Development (Windows: MSVC x64)
+- yaml-cpp 0.8 이상. 설치된 패키지가 없으면 CMake가 0.8.0의 고정 커밋을 받아 정적으로 빌드한다. 최초 구성에는 인터넷 연결이 필요하다.
 - 현재 검증 환경: Qt 6.11.2, GStreamer 1.28.7, MSVC
 
 [GStreamer 공식 다운로드](https://gstreamer.freedesktop.org/download/)에서 Windows MSVC x86_64의 Runtime and development headers를 설치한다. CMake는 기본 사용자/시스템 설치 경로를 검색한다. 다른 경로라면 `-DGSTREAMER_ROOT=C:/path/to/gstreamer`를 지정한다.
@@ -28,7 +29,22 @@ Windows 빌드 시 Qt/GStreamer DLL, 플러그인, Plugin Scanner가 실행 파�
 
 ## 영상 수신
 
-기본 수신 포트는 RTP/JPEG UDP 5000이다. 송신기가 없으면 `No video`가 표시된다.
+영상 수신 포트는 기본 UDP 5000이다. 송신기가 없으면 `No video`가 표시된다.
+
+코덱은 `config/pc-application.yaml`에서 설정한다. 아래 값을 `h264` 또는 `jpeg`로 수정한 뒤 GUI를 다시 실행한다. 보드 송신 코덱도 같아야 한다.
+
+```yaml
+video:
+  codec: h264
+```
+
+프로젝트 루트에서 다음과 같이 실행한다. GUI의 `Video codec`은 현재 설정을 보여주는 읽기 전용 항목이다.
+
+```powershell
+.\build\Debug\pc-application.exe --config config/pc-application.yaml
+```
+
+`--config`를 생략하면 현재 작업 폴더의 `config/pc-application.yaml`을 먼저 찾고, 없으면 실행 파일 옆 `config/pc-application.yaml`을 읽는다. 배포용 설정은 빌드 시 복사된다. 파일이 없거나 코덱 값이 잘못되면 실행을 중단한다. 기존 `--video-codec` 옵션과 코덱 선택 드롭다운은 제거했다.
 
 ### 추적 메타데이터와 BBox
 
@@ -41,27 +57,22 @@ BBox는 원본 영상의 **왼쪽 위 x, y, width, height** 좌표다. 영상과
 모델의 클래스 구성이 달라지면 UTF-8 파일에 **class 0부터 한 줄에 이름 하나씩** 작성해 지정한다. 빈 줄은 해당 ID의 이름이 없는 것으로 처리하며 이후 ID를 당기지 않는다. 목록에 없는 ID는 `Class 80`, 음수 ID는 `Unknown`으로 표시한다. 보드 모델과 PC 이름 목록은 같은 순서여야 한다.
 
 ```powershell
-.\build\Debug\pc-application.exe --video-codec h264 --class-names config/class_names.txt
+.\build\Debug\pc-application.exe --config config/pc-application.yaml --class-names config/class_names.txt
 ```
 
 영상과 메타데이터는 RTP timestamp로 대응한다. 영상은 대기 없이 표시하며, 늦게 도착한 메타데이터는 현재 표시 중인 timestamp가 같을 때만 박스를 갱신한다. 다른 프레임의 박스는 재사용하지 않으며, 캐시는 최대 128개·500ms로 제한한다. 원본 해상도가 다르거나 패킷 형식이 잘못된 경우 박스를 적용하지 않는다. 수신 stream 변경·코덱 변경 시 대응 상태를 초기화한다.
 
 `Metadata FPS`는 유효 패킷 수신율이며, `Track Count`는 현재 영상에 대응된 표시 박스 수다. GUI는 들어온 메타데이터만 사용하며, 검출 결과를 자체 생성하지 않는다. 대상 제어 명령 송신은 이번 수신·표시 기능과 별개다.
 
-PC 내부에서 이동하는 합성 영상과 박스를 함께 확인하려면 GUI를 실행하고 별도 터미널에서 다음 명령을 실행한다. H.264도 GUI와 송신기의 코덱을 같이 맞추면 된다.
+PC 내부에서 이동하는 합성 영상과 박스를 함께 확인하려면 YAML의 코덱을 `h264`로 맞추고 GUI를 실행한 뒤 별도 터미널에서 다음 명령을 실행한다.
 
 ```powershell
-.\build\Debug\mock-video-sender.exe --codec jpeg --metadata-port 5001 --frames 300
+.\build\Debug\mock-video-sender.exe --codec h264 --metadata-port 5001 --frames 300
 ```
 
 이 Mock의 박스는 시험용 주석이며 NPU 검출 결과가 아니다. 자동 시험은 실제 UDP 수신, JPEG/H.264의 프레임 대응, 잘못된 패킷·지연·만료 처리, 창 크기·원본 해상도·DPI에 따른 박스 렌더링 및 클릭 위치를 확인한다.
 
-JPEG/H.264는 오른쪽 DIAGNOSTICS의 코덱 선택 또는 실행 옵션으로 바꾼다. 보드 송신 설정도 같은 코덱이어야 한다. JPEG는 RTP payload 26, H.264는 96이며 영상 포트는 둘 다 5000이다. 코덱을 바꾸면 수신 파이프라인을 재시작한다. `--video-trace`를 사용 중이면 해당 파일도 다시 열린다.
-
-```powershell
-.\build\Debug\pc-application.exe --video-codec jpeg
-.\build\Debug\pc-application.exe --video-codec h264
-```
+JPEG는 RTP payload 26, H.264는 96이며 영상 포트는 둘 다 5000이다. 코덱 변경은 YAML 수정 후 GUI를 재실행하여 적용한다. 같은 경로의 `--video-trace` 기록은 재실행 시 덮어쓰므로 시험별로 파일명을 지정한다.
 
 `Decode + delivery`는 최근 약 1초 동안 처리한 프레임의 **평균 처리시간(ms)** 이다. Jitter Buffer를 지난 마지막 RTP 조각부터 디코딩·RGB 변환·앱의 이미지 복사 완료까지 측정하며, 최대 약 5ms의 polling 대기도 포함한다. 네트워크 전송시간과 실제 화면 paint 시간은 포함하지 않는다. 프레임별 타임스탬프 CSV를 켤 필요는 없다.
 
@@ -73,7 +84,7 @@ PC 내부 시험에서 H.264 Mock Sender는 다음과 같이 실행한다. Mock�
 .\build\Debug\mock-video-sender.exe --codec h264 --frames 300
 ```
 
-실제 비교는 보드의 `/home/orangepi/lwir-work/runtime-jpeg`에서 빌드한 송신 도구로 같은 RAW16 파일 또는 16비트 PNG 디렉터리를 재생한다. 다음 명령은 보드 SSH 터미널에서 각각 실행하며, PC의 코덱 선택도 맞춘다.
+실제 비교는 보드의 `/home/orangepi/lwir-work/runtime-jpeg`에서 빌드한 송신 도구로 같은 RAW16 파일 또는 16비트 PNG 디렉터리를 재생한다. 다음 명령은 보드 SSH 터미널에서 각각 실행하며, PC YAML의 코덱도 맞추고 GUI를 재실행한다.
 
 ```bash
 SEND=/home/orangepi/.cache/lwir-runtime/build/lwir_video_send
@@ -112,6 +123,8 @@ Set-Location C:\Project\LWIR_Project\pc-application
 
 ### 2. 터미널 1에서 수신기 실행
 
+아래 절차는 `config/pc-application.yaml`의 `video.codec: h264`를 기준으로 한다.
+
 ```powershell
 .\build\Debug\pc-application.exe --video-trace build/receiver.csv
 ```
@@ -121,7 +134,7 @@ Set-Location C:\Project\LWIR_Project\pc-application
 ### 3. 터미널 2에서 Mock Sender 실행
 
 ```powershell
-.\build\Debug\mock-video-sender.exe --frames 300 --trace build/sender.csv
+.\build\Debug\mock-video-sender.exe --codec h264 --frames 300 --trace build/sender.csv
 ```
 
 약 10초 동안 640×480, 30 FPS 테스트 영상을 전송한 뒤 송신기가 자동 종료한다. 더 오래 관찰하려면 `--frames 900`처럼 Frame 수를 늘린다.
@@ -172,7 +185,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/mock/video/Measure-Vid
 .\build\Debug\pc-application.exe --video-trace build/receiver.csv --video-packet-trace build/receiver-packets.csv
 
 # 터미널 2
-.\build\Debug\mock-video-sender.exe --frames 300 --trace build/sender.csv --packet-trace build/sender-packets.csv
+.\build\Debug\mock-video-sender.exe --codec h264 --frames 300 --trace build/sender.csv --packet-trace build/sender-packets.csv
 ```
 
 Packet 기록은 `build/receiver-packets.csv`, `build/sender-packets.csv`에 저장된다. ms 분석에는 `build/receiver.csv`를 사용한다.

@@ -6,15 +6,87 @@
 #include <QRegularExpression>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <stdexcept>
 #include "video/VideoReceiver.h"
 #include "ui/MainWindow.h"
 #include "metadata/MetadataReceiver.h"
 #include "metadata/FrameSynchronizer.h"
+#include "config/AppConfig.h"
 
 class VideoReceiverTest : public QObject
 {
     Q_OBJECT
 private slots:
+    void launchConfiguredApplication_data() { receiveAndRestart_data(); }
+
+    void launchConfiguredApplication()
+    {
+        QFETCH(QString, codecName);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString configPath = directory.filePath("pc.yaml");
+        QFile configFile(configPath);
+        QVERIFY(configFile.open(QIODevice::WriteOnly));
+        configFile.write("video:\n  codec: " + codecName.toUtf8() + "\n");
+        configFile.close();
+        const auto outputDir = QCoreApplication::applicationDirPath();
+        const auto tracePath = directory.filePath("receiver.csv");
+        QProcess application;
+        application.setWorkingDirectory(directory.path());
+        application.setProgram(outputDir + "/pc-application");
+        application.setArguments({"--config", configPath, "--video-port", "15004",
+                                  "--metadata-port", "15005", "--video-trace", tracePath});
+        application.start();
+        QVERIFY(application.waitForStarted());
+        QProcess sender;
+        sender.setProgram(outputDir + "/mock-video-sender");
+        sender.setArguments({"--port", "15004", "--metadata-port", "15005", "--codec", codecName, "--frames", "90"});
+        sender.start();
+        QVERIFY(sender.waitForStarted());
+        QTRY_VERIFY_WITH_TIMEOUT(sender.state() == QProcess::NotRunning, 8000);
+        QCOMPARE(sender.exitCode(), 0);
+        QCOMPARE(application.state(), QProcess::Running);
+        application.terminate(); // WM_CLOSE on Windows: flush the trace during normal shutdown.
+        QVERIFY(application.waitForFinished(5000));
+        QCOMPARE(application.exitCode(), 0);
+        QFile traceFile(tracePath);
+        QVERIFY(traceFile.open(QIODevice::ReadOnly));
+        int displayed = 0;
+        for (const auto &row : traceFile.readAll().split('\n')) {
+            const auto fields = row.split(',');
+            if (fields.size() == 17 && fields[14] == "1") ++displayed;
+        }
+        QVERIFY2(displayed > 20, "Configured GUI did not receive/display the selected codec");
+    }
+
+    void yamlCodecConfig()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath("pc.yaml");
+        const auto write = [&](const QByteArray &contents) {
+            QFile file(path);
+            return file.open(QIODevice::WriteOnly) && file.write(contents) == contents.size();
+        };
+        QVERIFY(write("video:\n  codec: h264\n"));
+        QCOMPARE(loadAppConfig(path).videoCodec, VideoCodec::H264);
+        QVERIFY(write("# Receiver settings\nvideo:\n  codec: 'jpeg' # matches board\n"));
+        QCOMPARE(loadAppConfig(path).videoCodec, VideoCodec::JPEG);
+        QVERIFY(write("video:\n  codec: vp9\n"));
+        QVERIFY_EXCEPTION_THROWN(loadAppConfig(path), std::runtime_error);
+        QVERIFY(write("video: {}\n"));
+        QVERIFY_EXCEPTION_THROWN(loadAppConfig(path), std::runtime_error);
+        QVERIFY(write("video: [\n"));
+        QVERIFY_EXCEPTION_THROWN(loadAppConfig(path), std::runtime_error);
+        QVERIFY_EXCEPTION_THROWN(loadAppConfig(directory.filePath("missing.yaml")), std::runtime_error);
+        MainWindow window(nullptr, false);
+        QVERIFY(!window.findChild<QComboBox *>("videoCodec"));
+        window.setVideoCodec(VideoCodec::H264);
+        QCOMPARE(window.findChild<QLabel *>("videoCodec")->text(), QString("H.264"));
+        window.setVideoCodec(VideoCodec::JPEG);
+        QCOMPARE(window.findChild<QLabel *>("videoCodec")->text(), QString("JPEG"));
+    }
+
     void classLabels()
     {
         QTemporaryDir directory;
@@ -292,7 +364,7 @@ private slots:
         ClassLabels labels;
         QVERIFY(labels.load(QFINDTESTDATA("../../config/class_names.txt")));
         window.setClassLabels(labels);
-        window.setVideoCodec(codecName);
+        window.setVideoCodec(codecName == "jpeg" ? VideoCodec::JPEG : VideoCodec::H264);
         window.show();
         qint64 currentTimestamp = -1;
         int matched = 0;
@@ -354,7 +426,7 @@ private slots:
         qputenv("GST_PLUGIN_PATH_1_0", (outputDir + "/gstreamer-1.0").toUtf8());
         VideoReceiver receiver;
         MainWindow window(nullptr, false);
-        window.setVideoCodec(codecName);
+        window.setVideoCodec(codecName == "jpeg" ? VideoCodec::JPEG : VideoCodec::H264);
         window.show();
         QObject::connect(&receiver, &VideoReceiver::frameReady, &window,
             [&window](const QImage &image, quint64, qint64, quint64 frameId) {
@@ -474,7 +546,7 @@ private slots:
         QFETCH(QString, codecName);
         VideoReceiver receiver;
         MainWindow window(nullptr, false);
-        window.setVideoCodec(codecName);
+        window.setVideoCodec(codecName == "jpeg" ? VideoCodec::JPEG : VideoCodec::H264);
         window.show();
         connect(&receiver, &VideoReceiver::frameReady, &window,
             [&window](const QImage &image, quint64, qint64, quint64 id) { window.setDisplayFrame(image, {}, id); });

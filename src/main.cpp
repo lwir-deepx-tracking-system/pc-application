@@ -3,8 +3,11 @@
 #include "video/VideoReceiver.h"
 #include "metadata/MetadataReceiver.h"
 #include "metadata/FrameSynchronizer.h"
+#include "config/AppConfig.h"
 #include <QCommandLineParser>
 #include <QDebug>
+#include <QFileInfo>
+#include <exception>
 
 int main(int argc, char *argv[])
 {
@@ -18,7 +21,7 @@ int main(int argc, char *argv[])
     parser.addOption({"video-packet-trace", "Optional pre-jitter RTP packet CSV.", "path"});
     parser.addOption({"video-port", "UDP video port.", "port", "5000"});
     parser.addOption({"metadata-port", "UDP tracking metadata port (runtime LWIM v2).", "port", "5001"});
-    parser.addOption({"video-codec", "Video codec: jpeg or h264.", "codec", "jpeg"});
+    parser.addOption({"config", "Application YAML file (default: config/pc-application.yaml).", "path"});
     parser.addOption({"class-names", "UTF-8 class names file, one name per line starting at class 0.", "path"});
     parser.addOption({"video-latency", "PoC jitter buffer latency in milliseconds.", "ms", "50"});
     parser.process(app);
@@ -28,11 +31,20 @@ int main(int argc, char *argv[])
     const uint port = parser.value("video-port").toUInt(&portOk);
     const uint latency = parser.value("video-latency").toUInt(&latencyOk);
     const uint metadataPort = parser.value("metadata-port").toUInt(&metadataPortOk);
-    const QString codecName = parser.value("video-codec");
     if (!portOk || port == 0 || port > 65535 || !latencyOk || latency > 10000
-        || !metadataPortOk || metadataPort == 0 || metadataPort > 65535 || metadataPort == port
-        || (codecName != "jpeg" && codecName != "h264"))
+        || !metadataPortOk || metadataPort == 0 || metadataPort > 65535 || metadataPort == port)
         parser.showHelp(1);
+
+    QString configPath = parser.isSet("config") ? parser.value("config") : "config/pc-application.yaml";
+    if (!parser.isSet("config") && !QFileInfo::exists(configPath))
+        configPath = QCoreApplication::applicationDirPath() + "/config/pc-application.yaml";
+    AppConfig config;
+    try {
+        config = loadAppConfig(configPath);
+    } catch (const std::exception &error) {
+        qCritical().noquote() << "Config:" << configPath << error.what();
+        return 1;
+    }
 
     MainWindow window(nullptr, parser.isSet("gui-preview"));
     ClassLabels classLabels;
@@ -44,7 +56,7 @@ int main(int argc, char *argv[])
         if (parser.isSet("class-names")) return 1;
     }
     window.setClassLabels(classLabels);
-    window.setVideoCodec(codecName);
+    window.setVideoCodec(config.videoCodec);
     VideoReceiver receiver;
     MetadataReceiver metadata;
     FrameSynchronizer synchronizer;
@@ -68,19 +80,13 @@ int main(int argc, char *argv[])
             synchronizer.clear();
             window.setDisplayFrame({}, {});
         });
-    const auto startReceiver = [&](const QString &name) {
+    if (!parser.isSet("gui-preview")) {
         synchronizer.clear();
-        window.setDisplayFrame({}, {});
-        return receiver.start(static_cast<quint16>(port), parser.value("video-trace"), latency,
-                              parser.value("video-packet-trace"), name == "jpeg"
-                                  ? VideoReceiver::Codec::JPEG : VideoReceiver::Codec::H264);
-    };
-    QObject::connect(&window, &MainWindow::videoCodecChanged, &receiver, [&](const QString &name) {
-        if (!parser.isSet("gui-preview")) startReceiver(name);
-    });
-    if (!parser.isSet("gui-preview")
-        && (!metadata.start(static_cast<quint16>(metadataPort)) || !startReceiver(codecName)))
-        return 1;
+        if (!metadata.start(static_cast<quint16>(metadataPort))
+            || !receiver.start(static_cast<quint16>(port), parser.value("video-trace"), latency,
+                               parser.value("video-packet-trace"), config.videoCodec))
+            return 1;
+    }
     window.show();
 
     return app.exec();

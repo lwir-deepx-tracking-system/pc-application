@@ -8,6 +8,28 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
 
 qt_standard_project_setup()
+option(BUILD_TESTING "Build application tests" OFF)
+
+find_package(yaml-cpp 0.8 CONFIG QUIET)
+if(NOT yaml-cpp_FOUND)
+    include(FetchContent)
+    set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "Build yaml-cpp tests" FORCE)
+    set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "Build yaml-cpp tools" FORCE)
+    set(YAML_CPP_INSTALL OFF CACHE BOOL "Install yaml-cpp" FORCE)
+    set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared yaml-cpp" FORCE)
+    FetchContent_Declare(yaml-cpp
+        GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+        GIT_TAG f7320141120f720aecc4c32be25586e7da9eb978)
+    block()
+        # yaml-cpp 0.8 predates CMake 4's minimum compatibility policy.
+        set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+        FetchContent_MakeAvailable(yaml-cpp)
+    endblock()
+endif()
+
+add_library(app-config STATIC src/config/AppConfig.cpp src/config/AppConfig.h src/video/VideoCodec.h)
+target_include_directories(app-config PUBLIC src)
+target_link_libraries(app-config PUBLIC Qt6::Core PRIVATE yaml-cpp::yaml-cpp)
 
 if(WIN32)
     set(GSTREAMER_ROOT "$ENV{GSTREAMER_1_0_ROOT_MSVC_X86_64}" CACHE PATH "GStreamer MSVC x64 installation")
@@ -78,10 +100,15 @@ target_link_libraries(pc-application
         Qt6::Network
         video-receiver
         metadata-receiver
+        app-config
 )
 
 deploy_runtime(pc-application)
 add_custom_command(TARGET pc-application POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:pc-application>/config"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/config/pc-application.yaml"
+        "$<TARGET_FILE_DIR:pc-application>/config/pc-application.yaml"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/config/class_names.txt"
         "$<TARGET_FILE_DIR:pc-application>/class_names.txt" VERBATIM)
@@ -90,7 +117,6 @@ qt_add_executable(mock-video-sender tools/mock/video/main.cpp)
 target_link_libraries(mock-video-sender PRIVATE video-receiver Qt6::Network)
 deploy_runtime(mock-video-sender)
 
-option(BUILD_TESTING "Build application tests" OFF)
 if(BUILD_TESTING)
     enable_testing()
     find_package(Qt6 REQUIRED COMPONENTS Test)
@@ -98,7 +124,8 @@ if(BUILD_TESTING)
         src/ui/MainWindow.cpp src/ui/MainWindow.h src/ui/VideoWidget.cpp src/ui/VideoWidget.h
         src/ui/ClassLabels.cpp src/ui/ClassLabels.h)
     set_target_properties(video-integration-test PROPERTIES WIN32_EXECUTABLE FALSE)
-    target_link_libraries(video-integration-test PRIVATE video-receiver metadata-receiver Qt6::Widgets Qt6::Test)
+    target_link_libraries(video-integration-test PRIVATE video-receiver metadata-receiver app-config Qt6::Widgets Qt6::Test)
+    add_dependencies(video-integration-test pc-application mock-video-sender)
     deploy_runtime(video-integration-test)
     add_test(NAME video-integration COMMAND video-integration-test -o -,txt)
 endif()

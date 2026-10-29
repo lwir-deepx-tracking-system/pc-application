@@ -2,6 +2,7 @@
 
 #include <QMainWindow>
 #include "VideoWidget.h"
+#include "video/VideoCodec.h"
 
 class QComboBox;
 class QPushButton;
@@ -16,7 +17,7 @@ public:
     void setDisplayFrame(const QImage &image, const QVector<TrackBox> &tracks, quint64 frameId = 0);
     void setVideoFps(double fps);
     void setVideoProcessingTime(double milliseconds);
-    void setVideoCodec(const QString &codec);
+    void setVideoCodec(VideoCodec codec);
     void setMetadataFps(double fps);
     void setTrackCount(int count);
     void setClassLabels(const ClassLabels &labels);
@@ -25,7 +26,6 @@ signals:
     void targetSetRequested(quint32 trackId);
     void targetClearRequested();
     void framePainted(quint64 frameId, qint64 monotonicNs);
-    void videoCodecChanged(const QString &codec);
 
 private:
     void requestTargetSet(quint32 trackId);
@@ -37,7 +37,7 @@ private:
     QPushButton *trackButton;
     QLabel *videoFpsLabel;
     QLabel *videoProcessingLabel;
-    QComboBox *videoCodecCombo;
+    QLabel *videoCodecLabel;
     QLabel *metadataFpsLabel;
     QLabel *trackCountLabel;
 };
