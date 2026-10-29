@@ -15,6 +15,29 @@ class VideoReceiverTest : public QObject
 {
     Q_OBJECT
 private slots:
+    void classLabels()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QFile file(directory.filePath("classes.txt"));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("person\nbicycle\n\ncar\n");
+        file.close();
+        ClassLabels labels;
+        QVERIFY(labels.load(file.fileName()));
+        QCOMPARE(labels.label(0), QString("person"));
+        QCOMPARE(labels.label(1), QString("bicycle"));
+        QCOMPARE(labels.label(2), QString("Class 2")); // Blank lines must not shift later IDs.
+        QCOMPARE(labels.label(3), QString("car"));
+        QCOMPARE(labels.label(80), QString("Class 80"));
+        QCOMPARE(labels.label(-1), QString("Unknown"));
+        QVERIFY(!labels.load(directory.filePath("missing.txt")));
+        QCOMPARE(labels.label(0), QString("person"));
+        QVERIFY(labels.load(QFINDTESTDATA("../../config/class_names.txt")));
+        QCOMPARE(labels.label(0), QString("person"));
+        QCOMPARE(labels.label(2), QString("car"));
+    }
+
     void decodeRuntimeMetadata()
     {
         // Independent wire fixture: frame 42, RTP 9000, ID 7, xywh 100/50/200/100.
@@ -29,6 +52,7 @@ private slots:
         QCOMPARE(decoded.imageSize, QSize(640, 480));
         QCOMPARE(decoded.tracks.size(), 1);
         QCOMPARE(decoded.tracks[0].trackId, quint32(7));
+        QCOMPARE(decoded.tracks[0].classId, qint32(1));
         QCOMPARE(decoded.tracks[0].bbox, QRectF(100, 50, 200, 100));
         QVERIFY(!decodeTrackingMetadata(packet.left(39), decoded));
         QVERIFY(!decodeTrackingMetadata(packet.left(67), decoded));
@@ -43,6 +67,10 @@ private slots:
         bad = packet;
         bad.replace(60, 4, QByteArray::fromHex("bf800000")); // Negative width.
         QVERIFY(!decodeTrackingMetadata(bad, decoded));
+        auto unknown = packet;
+        unknown.replace(44, 4, QByteArray::fromHex("ffffffff"));
+        QVERIFY(decodeTrackingMetadata(unknown, decoded));
+        QCOMPARE(decoded.tracks[0].classId, qint32(-1));
         auto empty = packet.left(40);
         empty.replace(36, 4, QByteArray(4, '\0'));
         QVERIFY(decodeTrackingMetadata(empty, decoded));
@@ -95,11 +123,12 @@ private slots:
         data.frameId = 42;
         data.rtpTimestamp = 9000;
         data.imageSize = image.size();
-        data.tracks = {{7, QRectF(100, 50, 200, 100)}};
+        data.tracks = {{7, QRectF(100, 50, 200, 100), 2}};
         sync.submitVideo(image, 9000, 17);
         QVERIFY(shown.isEmpty());
         sync.submitMetadata(data); // Late packet for the current frame.
         QCOMPARE(shown.size(), 1);
+        QCOMPARE(shown[0].classId, qint32(2));
         QCOMPARE(delivered, quint64(17)); // Preserve PC trace ID.
         sync.submitVideo(image, 12000, 18);
         QVERIFY(shown.isEmpty()); // Never carry boxes to an unrelated image.
@@ -260,6 +289,9 @@ private slots:
         MetadataReceiver metadata;
         FrameSynchronizer sync;
         MainWindow window(nullptr, false);
+        ClassLabels labels;
+        QVERIFY(labels.load(QFINDTESTDATA("../../config/class_names.txt")));
+        window.setClassLabels(labels);
         window.setVideoCodec(codecName);
         window.show();
         qint64 currentTimestamp = -1;
@@ -277,7 +309,7 @@ private slots:
                 if (!tracks.isEmpty()) {
                     ++matched;
                     const QRectF expected((quint32(currentTimestamp) / 3000 * 4) % 560, 200, 80, 80);
-                    if (tracks.size() != 1 || tracks[0].trackId != 7 || tracks[0].bbox != expected) wrongBox = true;
+                    if (tracks.size() != 1 || tracks[0].trackId != 7 || tracks[0].classId != 0 || tracks[0].bbox != expected) wrongBox = true;
                 }
             });
         connect(&metadata, &MetadataReceiver::fpsChanged, &window, &MainWindow::setMetadataFps);

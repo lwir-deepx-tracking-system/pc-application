@@ -26,6 +26,7 @@ bool decodeTrackingMetadata(const QByteArray &packet, TrackingMetadata &result)
     for (quint32 i = 0; i < count; ++i) {
         const int offset = 40 + int(i) * 28;
         const auto id = std::bit_cast<qint32>(u32(offset));
+        const auto classId = std::bit_cast<qint32>(u32(offset + 4));
         const float confidence = real(offset + 8);
         const float x = real(offset + 12), y = real(offset + 16);
         const float w = real(offset + 20), h = real(offset + 24);
@@ -33,7 +34,7 @@ bool decodeTrackingMetadata(const QByteArray &packet, TrackingMetadata &result)
             || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(w) || !std::isfinite(h)
             || w < 0 || h < 0) return false;
         const QRectF clipped = QRectF(x, y, w, h).intersected(QRectF(0, 0, width, height));
-        if (!clipped.isEmpty()) decoded.tracks.push_back({quint32(id), clipped});
+        if (!clipped.isEmpty()) decoded.tracks.push_back({quint32(id), clipped, classId});
     }
     result = std::move(decoded); // Reject malformed packets without partially changing output.
     return true;

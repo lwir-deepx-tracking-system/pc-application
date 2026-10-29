@@ -10,6 +10,7 @@ struct TrackBox
 {
     quint32 trackId;
     QRectF bbox; // Original-image pixels: top-left x, y, width, height.
+    qint32 classId = -1;
 };
 Q_DECLARE_METATYPE(TrackBox)
 Q_DECLARE_METATYPE(QVector<TrackBox>)

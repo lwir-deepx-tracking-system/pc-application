@@ -30,6 +30,12 @@ QRectF VideoWidget::videoRect() const
                          (height() - size.height()) / 2.0), size);
 }
 
+void VideoWidget::setClassLabels(const ClassLabels &labels)
+{
+    classLabels = labels;
+    update();
+}
+
 void VideoWidget::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
@@ -55,11 +61,21 @@ void VideoWidget::paintEvent(QPaintEvent *)
     painter.setFont(labelFont);
     for (const auto &track : tracks) {
         painter.drawRect(track.bbox);
-        const QString label = QString("ID %1").arg(track.trackId);
-        const qreal labelWidth = painter.fontMetrics().horizontalAdvance(label) + 12;
-        const QRectF labelRect(track.bbox.x(), qMax(0.0, track.bbox.y() - 23.0), labelWidth, 23);
+        const QString idLabel = QString("ID %1").arg(track.trackId);
+        const QString classLabel = classLabels.label(track.classId);
+        const auto metrics = painter.fontMetrics();
+        const qreal rowHeight = metrics.height() + 4;
+        const qreal labelWidth = qMin(qreal(image.width()),
+            qreal(qMax(metrics.horizontalAdvance(idLabel), metrics.horizontalAdvance(classLabel)) + 12));
+        const qreal labelHeight = rowHeight * 2;
+        const qreal x = qBound(0.0, track.bbox.x(), qMax(0.0, image.width() - labelWidth));
+        const qreal preferredY = track.bbox.y() >= labelHeight ? track.bbox.y() - labelHeight : track.bbox.y();
+        const qreal y = qBound(0.0, preferredY, qMax(0.0, image.height() - labelHeight));
+        const QRectF labelRect(x, y, labelWidth, labelHeight);
         painter.fillRect(labelRect, QColor("#102c29"));
-        painter.drawText(labelRect.adjusted(6, 0, -6, 0), Qt::AlignVCenter, label);
+        painter.drawText(QRectF(x + 6, y, labelWidth - 12, rowHeight), Qt::AlignVCenter, idLabel);
+        painter.drawText(QRectF(x + 6, y + rowHeight, labelWidth - 12, rowHeight), Qt::AlignVCenter,
+            metrics.elidedText(classLabel, Qt::ElideRight, int(labelWidth - 12)));
     }
     painter.restore();
     painter.end();

@@ -19,6 +19,7 @@ public:
     void setVideoCodec(const QString &codec);
     void setMetadataFps(double fps);
     void setTrackCount(int count);
+    void setClassLabels(const ClassLabels &labels);
 
 signals:
     void targetSetRequested(quint32 trackId);

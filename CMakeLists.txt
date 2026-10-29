@@ -68,6 +68,8 @@ qt_add_executable(pc-application
     src/ui/MainWindow.h
     src/ui/VideoWidget.cpp
     src/ui/VideoWidget.h
+    src/ui/ClassLabels.cpp
+    src/ui/ClassLabels.h
 )
 
 target_link_libraries(pc-application
@@ -79,6 +81,10 @@ target_link_libraries(pc-application
 )
 
 deploy_runtime(pc-application)
+add_custom_command(TARGET pc-application POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/config/class_names.txt"
+        "$<TARGET_FILE_DIR:pc-application>/class_names.txt" VERBATIM)
 
 qt_add_executable(mock-video-sender tools/mock/video/main.cpp)
 target_link_libraries(mock-video-sender PRIVATE video-receiver Qt6::Network)
@@ -89,7 +95,8 @@ if(BUILD_TESTING)
     enable_testing()
     find_package(Qt6 REQUIRED COMPONENTS Test)
     qt_add_executable(video-integration-test tests/integration/VideoReceiverTest.cpp
-        src/ui/MainWindow.cpp src/ui/MainWindow.h src/ui/VideoWidget.cpp src/ui/VideoWidget.h)
+        src/ui/MainWindow.cpp src/ui/MainWindow.h src/ui/VideoWidget.cpp src/ui/VideoWidget.h
+        src/ui/ClassLabels.cpp src/ui/ClassLabels.h)
     set_target_properties(video-integration-test PROPERTIES WIN32_EXECUTABLE FALSE)
     target_link_libraries(video-integration-test PRIVATE video-receiver metadata-receiver Qt6::Widgets Qt6::Test)
     deploy_runtime(video-integration-test)

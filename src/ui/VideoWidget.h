@@ -5,6 +5,7 @@
 #include <QVector>
 #include <QWidget>
 #include "metadata/TrackingMetadata.h"
+#include "ClassLabels.h"
 
 class VideoWidget : public QWidget
 {
@@ -14,6 +15,7 @@ public:
     explicit VideoWidget(QWidget *parent = nullptr);
     void setDisplayFrame(const QImage &image, const QVector<TrackBox> &tracks, quint64 frameId = 0);
     QRectF videoRect() const;
+    void setClassLabels(const ClassLabels &labels);
 
 signals:
     void targetSetRequested(quint32 trackId);
@@ -27,5 +29,6 @@ protected:
 private:
     QImage image;
     QVector<TrackBox> tracks;
+    ClassLabels classLabels;
     quint64 pendingFrameId = 0;
 };

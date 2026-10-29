@@ -197,6 +197,11 @@ void MainWindow::setTrackCount(int count)
     trackCountLabel->setText(QString::number(count));
 }
 
+void MainWindow::setClassLabels(const ClassLabels &labels)
+{
+    videoWidget->setClassLabels(labels);
+}
+
 void MainWindow::setDisplayFrame(const QImage &image, const QVector<TrackBox> &tracks, quint64 frameId)
 {
     videoWidget->setDisplayFrame(image, tracks, frameId);

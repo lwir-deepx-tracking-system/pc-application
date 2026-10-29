@@ -19,6 +19,7 @@ int main(int argc, char *argv[])
     parser.addOption({"video-port", "UDP video port.", "port", "5000"});
     parser.addOption({"metadata-port", "UDP tracking metadata port (runtime LWIM v2).", "port", "5001"});
     parser.addOption({"video-codec", "Video codec: jpeg or h264.", "codec", "jpeg"});
+    parser.addOption({"class-names", "UTF-8 class names file, one name per line starting at class 0.", "path"});
     parser.addOption({"video-latency", "PoC jitter buffer latency in milliseconds.", "ms", "50"});
     parser.process(app);
     bool portOk = false;
@@ -34,6 +35,15 @@ int main(int argc, char *argv[])
         parser.showHelp(1);
 
     MainWindow window(nullptr, parser.isSet("gui-preview"));
+    ClassLabels classLabels;
+    QString classError;
+    const QString classPath = parser.isSet("class-names") ? parser.value("class-names")
+        : QCoreApplication::applicationDirPath() + "/class_names.txt";
+    if (!classLabels.load(classPath, &classError)) {
+        qWarning().noquote() << "Class names:" << classPath << classError;
+        if (parser.isSet("class-names")) return 1;
+    }
+    window.setClassLabels(classLabels);
     window.setVideoCodec(codecName);
     VideoReceiver receiver;
     MetadataReceiver metadata;
