@@ -103,6 +103,7 @@ private slots:
         QCOMPARE(labels.label(3), QString("car"));
         QCOMPARE(labels.label(80), QString("Class 80"));
         QCOMPARE(labels.label(-1), QString("Unknown"));
+        QCOMPARE(labels.label(255), QString("Unknown"));
         QVERIFY(!labels.load(directory.filePath("missing.txt")));
         QCOMPARE(labels.label(0), QString("person"));
         QVERIFY(labels.load(QFINDTESTDATA("../../config/class_names.txt")));
@@ -112,40 +113,102 @@ private slots:
 
     void decodeRuntimeMetadata()
     {
-        // Independent wire fixture: frame 42, RTP 9000, ID 7, xywh 100/50/200/100.
+        // Independent fixture: frame 42, RTP 9000, ID 7, xywh 100/50/200/100.
         const auto packet = QByteArray::fromHex(
-            "4c57494d00020001000000000000002a00002328000000000001e24000000280000001e0"
-            "0000000100000007000000013f40000042c80000424800004348000042c80000");
+            "4c574952000000000000002a00002328000000000001e24000000001"
+            "0000000742c80000424800004348000042c80000013f400000");
         TrackingMetadata decoded;
         QVERIFY(decodeTrackingMetadata(packet, decoded));
         QCOMPARE(decoded.frameId, quint64(42));
         QCOMPARE(decoded.rtpTimestamp, quint32(9000));
         QCOMPARE(decoded.guiStartedUs, quint64(123456));
         QCOMPARE(decoded.imageSize, QSize(640, 480));
+        QCOMPARE(decoded.trackCount, quint32(1));
         QCOMPARE(decoded.tracks.size(), 1);
         QCOMPARE(decoded.tracks[0].trackId, quint32(7));
-        QCOMPARE(decoded.tracks[0].classId, qint32(1));
+        QCOMPARE(decoded.tracks[0].classId, quint8(1));
+        QCOMPARE(decoded.tracks[0].confidence, 0.75f);
         QCOMPARE(decoded.tracks[0].bbox, QRectF(100, 50, 200, 100));
-        QVERIFY(!decodeTrackingMetadata(packet.left(39), decoded));
-        QVERIFY(!decodeTrackingMetadata(packet.left(67), decoded));
+        QVERIFY(!decodeTrackingMetadata(packet.left(27), decoded));
+        QVERIFY(!decodeTrackingMetadata(packet.left(52), decoded));
         QVERIFY(!decodeTrackingMetadata(packet + 'x', decoded));
         auto bad = packet;
-        bad[5] = 1; // Old/incompatible version.
+        bad[3] = 'M'; // Old LWIM magic is incompatible.
         QVERIFY(!decodeTrackingMetadata(bad, decoded));
         bad = packet;
-        bad.replace(52, 4, QByteArray::fromHex("7fc00000")); // NaN x.
+        bad.replace(24, 4, QByteArray::fromHex("ffffffff")); // Count cannot exceed payload.
         QVERIFY(!decodeTrackingMetadata(bad, decoded));
-        QCOMPARE(decoded.tracks[0].bbox, QRectF(100, 50, 200, 100));
-        bad = packet;
-        bad.replace(60, 4, QByteArray::fromHex("bf800000")); // Negative width.
-        QVERIFY(!decodeTrackingMetadata(bad, decoded));
-        auto unknown = packet;
-        unknown.replace(44, 4, QByteArray::fromHex("ffffffff"));
-        QVERIFY(decodeTrackingMetadata(unknown, decoded));
-        QCOMPARE(decoded.tracks[0].classId, qint32(-1));
-        auto empty = packet.left(40);
-        empty.replace(36, 4, QByteArray(4, '\0'));
+        const auto oldPacket = QByteArray::fromHex(
+            "4c57494d00020001000000000000002a00002328000000000001e24000000280000001e0"
+            "0000000100000007000000013f40000042c80000424800004348000042c80000");
+        QVERIFY(!decodeTrackingMetadata(oldPacket, decoded));
+        QCOMPARE(decoded.tracks[0].bbox, QRectF(100, 50, 200, 100)); // Rejection is atomic.
+        auto highIds = packet;
+        highIds.replace(4, 8, QByteArray::fromHex("000000010000002a"));
+        highIds.replace(28, 4, QByteArray::fromHex("ffffffff"));
+        highIds.replace(32, 4, QByteArray::fromHex("42c88000")); // Fractional x = 100.25.
+        highIds[48] = char(255);
+        QVERIFY(decodeTrackingMetadata(highIds, decoded));
+        QCOMPARE(decoded.frameId, quint64(0x10000002aULL));
+        QCOMPARE(decoded.tracks[0].trackId, quint32(0xffffffff));
+        QCOMPARE(decoded.tracks[0].classId, quint8(255));
+        QCOMPARE(decoded.tracks[0].bbox.x(), 100.25);
+        auto empty = packet.left(28);
+        empty.replace(24, 4, QByteArray(4, '\0'));
         QVERIFY(decodeTrackingMetadata(empty, decoded));
+        QCOMPARE(decoded.trackCount, quint32(0));
+        QVERIFY(decoded.tracks.isEmpty());
+    }
+
+    void invalidTrackDoesNotDiscardOtherTracks_data()
+    {
+        QTest::addColumn<int>("offset");
+        QTest::addColumn<QByteArray>("value");
+        QTest::newRow("invalid-id") << 0 << QByteArray::fromHex("00000000");
+        QTest::newRow("negative-width") << 12 << QByteArray::fromHex("bf800000");
+        QTest::newRow("negative-height") << 16 << QByteArray::fromHex("bf800000");
+        QTest::newRow("zero-width") << 12 << QByteArray(4, '\0');
+        QTest::newRow("zero-height") << 16 << QByteArray(4, '\0');
+        QTest::newRow("confidence-negative") << 21 << QByteArray::fromHex("bf800000");
+        QTest::newRow("confidence-above-one") << 21 << QByteArray::fromHex("40000000");
+        for (int offset : {4, 8, 12, 16, 21}) {
+            QTest::newRow(qPrintable(QString("nan-%1").arg(offset))) << offset << QByteArray::fromHex("7fc00000");
+            QTest::newRow(qPrintable(QString("inf-%1").arg(offset))) << offset << QByteArray::fromHex("7f800000");
+        }
+    }
+
+    void invalidTrackDoesNotDiscardOtherTracks()
+    {
+        QFETCH(int, offset);
+        QFETCH(QByteArray, value);
+        auto header = QByteArray::fromHex("4c574952000000000000002a00002328000000000001e24000000003");
+        const auto valid = QByteArray::fromHex("0000000742c80000424800004348000042c80000013f400000");
+        auto bad = valid;
+        bad.replace(offset, value.size(), value);
+        TrackingMetadata decoded;
+        QVERIFY(decodeTrackingMetadata(header + valid + bad + valid, decoded));
+        QCOMPARE(decoded.trackCount, quint32(3));
+        QCOMPARE(decoded.tracks.size(), 2);
+        QCOMPARE(decoded.tracks[0].bbox, QRectF(100, 50, 200, 100));
+        QCOMPARE(decoded.tracks[1].confidence, 0.75f);
+        header.replace(24, 4, QByteArray::fromHex("00000001"));
+        QVERIFY(decodeTrackingMetadata(header + bad, decoded));
+        QCOMPARE(decoded.trackCount, quint32(1));
+        QVERIFY(decoded.tracks.isEmpty());
+    }
+
+    void clipMetadataBoxes()
+    {
+        auto header = QByteArray::fromHex("4c574952000000000000002a00002328000000000001e24000000001");
+        auto track = QByteArray::fromHex("00000007c1200000c1a0000041f0000042200000ff3f800000");
+        TrackingMetadata decoded;
+        QVERIFY(decodeTrackingMetadata(header + track, decoded));
+        QCOMPARE(decoded.tracks[0].bbox, QRectF(0, 0, 20, 20)); // (-10,-20,30,40).
+        track.replace(4, 16, QByteArray::fromHex("441d800043ed800042a0000042200000"));
+        QVERIFY(decodeTrackingMetadata(header + track, decoded));
+        QCOMPARE(decoded.tracks[0].bbox, QRectF(630, 475, 10, 5));
+        track.replace(4, 4, QByteArray::fromHex("44200000")); // x = 640: fully outside.
+        QVERIFY(decodeTrackingMetadata(header + track, decoded));
         QVERIFY(decoded.tracks.isEmpty());
     }
 
@@ -153,26 +216,13 @@ private slots:
     {
         MetadataReceiver receiver;
         QSignalSpy frames(&receiver, &MetadataReceiver::frameReady);
-        const QString boardHost = qEnvironmentVariable("LWIR_BOARD_METADATA_HOST");
-        const quint16 port = boardHost.isEmpty() ? 15001 : 5001;
+        const quint16 port = 15001;
         QVERIFY(receiver.start(port));
         QUdpSocket sender;
         const auto packet = QByteArray::fromHex(
-            "4c57494d00020001000000000000002a00002328000000000001e24000000280000001e0"
-            "0000000100000007000000013f40000042c80000424800004348000042c80000");
-        if (boardHost.isEmpty()) {
-            QCOMPARE(sender.writeDatagram(packet, QHostAddress::LocalHost, port), qint64(packet.size()));
-        } else {
-            QVERIFY(QRegularExpression("^[0-9.]+$").match(boardHost).hasMatch());
-            // Optional live compatibility check with the runtime's C++ encoder.
-            QProcess board;
-            board.setProgram("ssh");
-            board.setArguments({"-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "pi",
-                "/home/orangepi/.cache/lwir-runtime/metadata-probe", boardHost, QString::number(port)});
-            board.start();
-            QVERIFY(board.waitForFinished(10000));
-            QCOMPARE(board.exitCode(), 0);
-        }
+            "4c574952000000000000002a00002328000000000001e24000000001"
+            "0000000742c80000424800004348000042c80000013f400000");
+        QCOMPARE(sender.writeDatagram(packet, QHostAddress::LocalHost, port), qint64(packet.size()));
         QTRY_COMPARE(frames.count(), 1);
         const auto decoded = qvariant_cast<TrackingMetadata>(frames[0][0]);
         QCOMPARE(decoded.tracks[0].bbox, QRectF(100, 50, 200, 100));

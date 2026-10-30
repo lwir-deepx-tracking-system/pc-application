@@ -24,7 +24,7 @@ bool ClassLabels::load(const QString &path, QString *error)
 
 QString ClassLabels::label(qint32 classId) const
 {
-    if (classId < 0) return "Unknown";
+    if (classId < 0 || classId == 255) return "Unknown";
     if (classId < names.size() && !names[classId].isEmpty()) return names[classId];
     return QString("Class %1").arg(classId);
 }

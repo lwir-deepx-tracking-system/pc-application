@@ -49,7 +49,7 @@ int main(int argc, char **argv)
     parser.addOption({"host", "Destination IP.", "address", "127.0.0.1"});
     parser.addOption({"port", "Destination UDP port.", "port", "5000"});
     parser.addOption({"codec", "Codec: jpeg or h264 (software test sender).", "codec", "jpeg"});
-    parser.addOption({"metadata-port", "Send synthetic LWIM v2 boxes to this UDP port; 0 disables.", "port", "0"});
+    parser.addOption({"metadata-port", "Send synthetic LWIR tracking metadata to this UDP port; 0 disables.", "port", "0"});
     parser.addOption({"frames", "Number of frames; 0 sends until interrupted.", "count", "0"});
     parser.addOption({"trace", "Frame summary CSV output.", "path"});
     parser.addOption({"packet-trace", "Optional RTP packet CSV output.", "path"});
@@ -156,10 +156,10 @@ int main(int argc, char **argv)
             QDataStream stream(&packet, QIODevice::WriteOnly);
             stream.setByteOrder(QDataStream::BigEndian);
             stream.setFloatingPointPrecision(QDataStream::SinglePrecision);
-            stream << quint32(0x4c57494d) << quint16(2) << quint16(1) << frameIndex
-                   << quint32(ticks) << quint64(0) << quint32(640) << quint32(480) << quint32(1)
-                   << qint32(7) << qint32(0) << float(0.95) << float((frameIndex * 4) % 560)
-                   << float(200) << float(80) << float(80);
+            stream << quint32(0x4c574952) << quint64(frameIndex + 1)
+                   << quint32(ticks) << quint64(0) << quint32(1)
+                   << quint32(7) << float((frameIndex * 4) % 560)
+                   << float(200) << float(80) << float(80) << quint8(0) << float(0.95);
             if (metadataSocket.writeDatagram(packet, QHostAddress(parser.value("host")), quint16(metadataPort)) != packet.size()) {
                 exitCode = 1;
                 app.quit();

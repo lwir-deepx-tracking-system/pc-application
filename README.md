@@ -48,7 +48,9 @@ video:
 
 ### 추적 메타데이터와 BBox
 
-GUI는 기본 UDP **5001**에서 보드 runtime의 **LWIM v2** 메타데이터를 수신한다. 보드 `gui.metadata.enabled`를 `true`, `gui.metadata.host`를 PC IP, `gui.metadata.port`를 `5001`로 맞춘다. 영상 UDP 5000과 메타데이터 UDP 5001 모두 PC에 도달해야 한다. 수신 포트는 `--metadata-port`로 변경할 수 있다.
+GUI는 기본 UDP **5001**에서 **LWIR** 메타데이터를 수신한다. 헤더는 28바이트(Magic 4, Frame ID 8, RTP timestamp 4, guiStartedUs 8, Track count 4), Track은 25바이트(ID 4, xywh float32 16, Class ID 1, Confidence float32 4)다. Version·메시지 종류·원본 크기·Detection count는 전송하지 않는다. 다중 바이트 필드는 Big Endian이며 원본 좌표계는 640×480 고정이다. Track ID 0은 무효, Class ID 255는 Unknown이다.
+
+보드 송신부도 이 형식을 사용해야 한다. 기존 LWIM v2는 호환되지 않는다. 보드 `gui.metadata.enabled`를 `true`, `gui.metadata.host`를 PC IP, `gui.metadata.port`를 `5001`로 맞춘다. 영상 UDP 5000과 메타데이터 UDP 5001 모두 PC에 도달해야 한다. 수신 포트는 `--metadata-port`로 변경할 수 있다.
 
 BBox는 원본 영상의 **왼쪽 위 x, y, width, height** 좌표다. 영상과 박스에 같은 배율과 중앙 여백을 적용하므로 창 크기·화면 배율을 바꿔도 위치가 맞는다. 박스 클릭도 같은 변환을 역으로 적용한다.
 
@@ -60,7 +62,9 @@ BBox는 원본 영상의 **왼쪽 위 x, y, width, height** 좌표다. 영상과
 .\build\Debug\pc-application.exe --config config/pc-application.yaml --class-names config/class_names.txt
 ```
 
-영상과 메타데이터는 RTP timestamp로 대응한다. 영상은 대기 없이 표시하며, 늦게 도착한 메타데이터는 현재 표시 중인 timestamp가 같을 때만 박스를 갱신한다. 다른 프레임의 박스는 재사용하지 않으며, 캐시는 최대 128개·500ms로 제한한다. 원본 해상도가 다르거나 패킷 형식이 잘못된 경우 박스를 적용하지 않는다. 수신 stream 변경·코덱 변경 시 대응 상태를 초기화한다.
+영상과 메타데이터는 RTP timestamp로 대응한다. 영상은 대기 없이 표시하며, 늦게 도착한 메타데이터는 현재 표시 중인 timestamp가 같을 때만 박스를 갱신한다. 다른 프레임의 박스는 재사용하지 않으며, 캐시는 최대 128개·500ms로 제한한다. 영상 크기가 640×480이 아니면 박스를 적용하지 않는다. 수신 stream 변경 시 대응 상태를 초기화한다.
+
+화면 밖 bbox는 영상 영역으로 자르고, 폭·높이 0 또는 잘라낸 뒤 빈 박스는 표시하지 않는다. NaN/Inf·음수 크기·Confidence 범위(0~1) 초과·Track ID 0은 해당 Track만 제외한다. 패킷 Magic·길이·count가 잘못된 경우 패킷 전체를 폐기한다. Wire의 Track count와 검증 후 표시되는 박스 수는 다를 수 있다. guiStartedUs는 송신 작업 시작 시각이며 이것만으로 네트워크 지연을 계산하지 않는다.
 
 `Metadata FPS`는 유효 패킷 수신율이며, `Track Count`는 현재 영상에 대응된 표시 박스 수다. GUI는 들어온 메타데이터만 사용하며, 검출 결과를 자체 생성하지 않는다. 대상 제어 명령 송신은 이번 수신·표시 기능과 별개다.
 

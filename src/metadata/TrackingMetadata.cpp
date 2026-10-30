@@ -6,35 +6,33 @@
 
 bool decodeTrackingMetadata(const QByteArray &packet, TrackingMetadata &result)
 {
-    if (packet.size() < 40 || packet.size() > 65507) return false;
+    if (packet.size() < TrackingWire::HeaderSize || packet.size() > 65507) return false;
     const auto *data = reinterpret_cast<const uchar *>(packet.constData());
     const auto u32 = [data](int offset) { return qFromBigEndian<quint32>(data + offset); };
     const auto real = [&u32](int offset) { return std::bit_cast<float>(u32(offset)); };
-    if (u32(0) != 0x4c57494d || qFromBigEndian<quint16>(data + 4) != 2
-        || qFromBigEndian<quint16>(data + 6) != 1) return false;
-    const quint32 width = u32(28), height = u32(32), count = u32(36);
-    if (!width || !height || width > 16384 || height > 16384
-        || count > quint32((packet.size() - 40) / 28)
-        || packet.size() != 40 + qsizetype(count) * 28) return false;
+    if (u32(0) != TrackingWire::Magic) return false;
+    const quint32 count = u32(24);
+    if (count > quint32((packet.size() - TrackingWire::HeaderSize) / TrackingWire::TrackSize)
+        || packet.size() != TrackingWire::HeaderSize + qsizetype(count) * TrackingWire::TrackSize) return false;
 
     TrackingMetadata decoded;
-    decoded.frameId = qFromBigEndian<quint64>(data + 8);
-    decoded.rtpTimestamp = u32(16);
-    decoded.guiStartedUs = qFromBigEndian<quint64>(data + 20);
-    decoded.imageSize = QSize(int(width), int(height));
+    decoded.frameId = qFromBigEndian<quint64>(data + 4);
+    decoded.rtpTimestamp = u32(12);
+    decoded.guiStartedUs = qFromBigEndian<quint64>(data + 16);
+    decoded.trackCount = count;
     decoded.tracks.reserve(count);
     for (quint32 i = 0; i < count; ++i) {
-        const int offset = 40 + int(i) * 28;
-        const auto id = std::bit_cast<qint32>(u32(offset));
-        const auto classId = std::bit_cast<qint32>(u32(offset + 4));
-        const float confidence = real(offset + 8);
-        const float x = real(offset + 12), y = real(offset + 16);
-        const float w = real(offset + 20), h = real(offset + 24);
-        if (id < 0 || !std::isfinite(confidence) || confidence < 0 || confidence > 1
+        const int offset = TrackingWire::HeaderSize + int(i) * TrackingWire::TrackSize;
+        const auto id = u32(offset);
+        const float x = real(offset + 4), y = real(offset + 8);
+        const float w = real(offset + 12), h = real(offset + 16);
+        const quint8 classId = data[offset + 20];
+        const float confidence = real(offset + 21);
+        if (!id || !std::isfinite(confidence) || confidence < 0 || confidence > 1
             || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(w) || !std::isfinite(h)
-            || w < 0 || h < 0) return false;
-        const QRectF clipped = QRectF(x, y, w, h).intersected(QRectF(0, 0, width, height));
-        if (!clipped.isEmpty()) decoded.tracks.push_back({quint32(id), clipped, classId});
+            || w <= 0 || h <= 0) continue;
+        const QRectF clipped = QRectF(x, y, w, h).intersected(QRectF(QPointF(0, 0), decoded.imageSize));
+        if (!clipped.isEmpty()) decoded.tracks.push_back({id, clipped, classId, confidence});
     }
     result = std::move(decoded); // Reject malformed packets without partially changing output.
     return true;

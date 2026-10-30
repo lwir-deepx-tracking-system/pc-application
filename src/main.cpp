@@ -20,7 +20,7 @@ int main(int argc, char *argv[])
     parser.addOption({"video-trace", "Write frame summary CSV.", "path"});
     parser.addOption({"video-packet-trace", "Optional pre-jitter RTP packet CSV.", "path"});
     parser.addOption({"video-port", "UDP video port.", "port", "5000"});
-    parser.addOption({"metadata-port", "UDP tracking metadata port (runtime LWIM v2).", "port", "5001"});
+    parser.addOption({"metadata-port", "UDP tracking metadata port (LWIR, 28-byte header / 25-byte tracks).", "port", "5001"});
     parser.addOption({"config", "Application YAML file (default: config/pc-application.yaml).", "path"});
     parser.addOption({"class-names", "UTF-8 class names file, one name per line starting at class 0.", "path"});
     parser.addOption({"video-latency", "PoC jitter buffer latency in milliseconds.", "ms", "50"});
