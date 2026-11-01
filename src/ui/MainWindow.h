@@ -19,7 +19,7 @@ public:
     void setVideoProcessingTime(double milliseconds);
     void setVideoCodec(VideoCodec codec);
     void setMetadataFps(double fps);
-    void setTrackCount(int count);
+    void setTrackCounts(quint32 wireCount, qsizetype displayedCount, bool metadataAvailable);
     void setClassLabels(const ClassLabels &labels);
 
 signals:

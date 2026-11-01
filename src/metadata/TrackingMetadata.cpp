@@ -17,6 +17,7 @@ bool decodeTrackingMetadata(const QByteArray &packet, TrackingMetadata &result)
 
     TrackingMetadata decoded;
     decoded.frameId = qFromBigEndian<quint64>(data + 4);
+    if (!decoded.frameId) return false;
     decoded.rtpTimestamp = u32(12);
     decoded.guiStartedUs = qFromBigEndian<quint64>(data + 16);
     decoded.trackCount = count;

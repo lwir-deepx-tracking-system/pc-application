@@ -138,6 +138,13 @@ private slots:
         bad = packet;
         bad.replace(24, 4, QByteArray::fromHex("ffffffff")); // Count cannot exceed payload.
         QVERIFY(!decodeTrackingMetadata(bad, decoded));
+        bad = packet;
+        bad.replace(4, 8, QByteArray(8, '\0')); // Frame ID 0 is invalid, even with valid tracks.
+        QVERIFY(!decodeTrackingMetadata(bad, decoded));
+        QCOMPARE(decoded.frameId, quint64(42));
+        bad = bad.left(28);
+        bad.replace(24, 4, QByteArray(4, '\0'));
+        QVERIFY(!decodeTrackingMetadata(bad, decoded)); // Header-only frames also require a valid ID.
         const auto oldPacket = QByteArray::fromHex(
             "4c57494d00020001000000000000002a00002328000000000001e24000000280000001e0"
             "0000000100000007000000013f40000042c80000424800004348000042c80000");
@@ -245,6 +252,7 @@ private slots:
         data.frameId = 42;
         data.rtpTimestamp = 9000;
         data.imageSize = image.size();
+        data.trackCount = 1;
         data.tracks = {{7, QRectF(100, 50, 200, 100), 2}};
         sync.submitVideo(image, 9000, 17);
         QVERIFY(shown.isEmpty());
@@ -273,9 +281,57 @@ private slots:
         sync.submitMetadata(data);
         QCOMPARE(shown.size(), 1);
         data.tracks.clear();
+        data.trackCount = 0;
         sync.submitMetadata(data);
         QVERIFY(shown.isEmpty());
         sync.clear();
+    }
+
+    void synchronizeTrackCounts()
+    {
+        // Three wire records, but only one remains after record validation/clipping.
+        const auto header = QByteArray::fromHex("4c574952000000000000002a00002328000000000001e24000000003");
+        const auto valid = QByteArray::fromHex("0000000742c80000424800004348000042c80000013f400000");
+        auto invalid = valid;
+        invalid.replace(0, 4, QByteArray(4, '\0'));
+        auto outside = valid;
+        outside.replace(4, 4, QByteArray::fromHex("44200000")); // x = 640, no visible intersection.
+        TrackingMetadata metadata;
+        QVERIFY(decodeTrackingMetadata(header + valid + invalid + outside, metadata));
+        QCOMPARE(metadata.trackCount, quint32(3));
+        QCOMPARE(metadata.tracks.size(), 1);
+
+        FrameSynchronizer sync;
+        MainWindow window(nullptr, false);
+        connect(&sync, &FrameSynchronizer::frameReady, &window, &MainWindow::setDisplayFrame);
+        connect(&sync, &FrameSynchronizer::trackCountsChanged, &window, &MainWindow::setTrackCounts);
+        auto *count = window.findChild<QLabel *>("trackCount");
+        auto *tracks = window.findChild<QComboBox *>("trackCombo");
+        QImage image(640, 480, QImage::Format_RGB888);
+        image.fill(Qt::gray);
+        sync.submitVideo(image, 9000, 1);
+        QCOMPARE(count->text(), QString("--"));
+        sync.submitMetadata(metadata);
+        QCOMPARE(count->text(), QString("3"));
+        QCOMPARE(count->toolTip(), QString("Wire records: 3\nDisplayed boxes: 1"));
+        QCOMPARE(tracks->count(), 1);
+        for (auto *label : window.findChildren<QLabel *>())
+            QVERIFY(label->text() != "Detection");
+
+        sync.submitVideo(image, 12000, 2);
+        QCOMPARE(count->text(), QString("--"));
+        QCOMPARE(tracks->count(), 0);
+        const auto empty = QByteArray::fromHex("4c574952000000000000002b00002ee0000000000001e24000000000");
+        QVERIFY(decodeTrackingMetadata(empty, metadata));
+        sync.submitMetadata(metadata);
+        QCOMPARE(count->text(), QString("0"));
+        QCOMPARE(count->toolTip(), QString("Wire records: 0\nDisplayed boxes: 0"));
+        // A zero-track packet must expire to unknown, rather than remain a permanent zero.
+        QTRY_COMPARE_WITH_TIMEOUT(count->text(), QString("--"), 1000);
+        sync.submitMetadata(metadata);
+        QCOMPARE(count->text(), QString("0"));
+        sync.clear();
+        QCOMPARE(count->text(), QString("--"));
     }
 
     void resizeBoundingBoxes_data()
@@ -435,7 +491,7 @@ private slots:
                 }
             });
         connect(&metadata, &MetadataReceiver::fpsChanged, &window, &MainWindow::setMetadataFps);
-        connect(&sync, &FrameSynchronizer::trackCountChanged, &window, &MainWindow::setTrackCount);
+        connect(&sync, &FrameSynchronizer::trackCountsChanged, &window, &MainWindow::setTrackCounts);
         QSignalSpy videoErrors(&video, &VideoReceiver::errorOccurred);
         QSignalSpy metadataErrors(&metadata, &MetadataReceiver::errorOccurred);
         QVERIFY(metadata.start(15003));

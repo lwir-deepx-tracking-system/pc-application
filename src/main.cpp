@@ -67,7 +67,7 @@ int main(int argc, char *argv[])
     QObject::connect(&metadata, &MetadataReceiver::frameReady, &synchronizer, &FrameSynchronizer::submitMetadata);
     QObject::connect(&receiver, &VideoReceiver::streamRestarted, &synchronizer, &FrameSynchronizer::clear);
     QObject::connect(&synchronizer, &FrameSynchronizer::frameReady, &window, &MainWindow::setDisplayFrame);
-    QObject::connect(&synchronizer, &FrameSynchronizer::trackCountChanged, &window, &MainWindow::setTrackCount);
+    QObject::connect(&synchronizer, &FrameSynchronizer::trackCountsChanged, &window, &MainWindow::setTrackCounts);
     QObject::connect(&metadata, &MetadataReceiver::fpsChanged, &window, &MainWindow::setMetadataFps);
     QObject::connect(&metadata, &MetadataReceiver::errorOccurred, &window,
         [](const QString &message) { qCritical().noquote() << "Metadata:" << message; });

@@ -139,10 +139,11 @@ MainWindow::MainWindow(QWidget *parent, bool dummyPreview) : QMainWindow(parent)
     videoProcessingLabel->setToolTip("Average ms: complete RTP frame after jitter buffer to owned image; includes polling wait. Excludes network and paint.");
     metadataFpsLabel = addValueRow(diagnosticLayout, "Metadata FPS", "--");
     metadataFpsLabel->setObjectName("metadataFps");
-    for (const auto &name : {"Metadata Loss", "Video Missing", "Sync Miss", "Detection"})
-        addValueRow(diagnosticLayout, name, "--");
+    for (const auto &name : {"Metadata Loss", "Video Missing", "Sync Miss"})
+        addValueRow(diagnosticLayout, name, "--")->setToolTip("Not implemented yet.");
     trackCountLabel = addValueRow(diagnosticLayout, "Track Count", "--");
     trackCountLabel->setObjectName("trackCount");
+    setTrackCounts(0, 0, false);
     panelLayout->addWidget(diagnosticGroup);
 
     connect(trackCombo, &QComboBox::editTextChanged, this, [this] {
@@ -183,9 +184,12 @@ void MainWindow::setMetadataFps(double fps)
     metadataFpsLabel->setText(QString::number(fps, 'f', 1));
 }
 
-void MainWindow::setTrackCount(int count)
+void MainWindow::setTrackCounts(quint32 wireCount, qsizetype displayedCount, bool metadataAvailable)
 {
-    trackCountLabel->setText(QString::number(count));
+    trackCountLabel->setText(metadataAvailable ? QString::number(wireCount) : "--");
+    trackCountLabel->setToolTip(metadataAvailable
+        ? QString("Wire records: %1\nDisplayed boxes: %2").arg(wireCount).arg(displayedCount)
+        : QString("No metadata for the current frame."));
 }
 
 void MainWindow::setClassLabels(const ClassLabels &labels)

@@ -14,14 +14,23 @@
 - Qt 6 Widgets/Network (Windows: MSVC x64 Kit)
 - GStreamer 1.22 이상 Runtime + Development (Windows: MSVC x64)
 - yaml-cpp 0.8 이상. 설치된 패키지가 없으면 CMake가 0.8.0의 고정 커밋을 받아 정적으로 빌드한다. 최초 구성에는 인터넷 연결이 필요하다.
-- 현재 검증 환경: Qt 6.11.2, GStreamer 1.28.7, MSVC
+- 현재 검증 환경: Qt 6.11.3, GStreamer 1.28.8.1, MSVC (Visual Studio 2026)
 
 [GStreamer 공식 다운로드](https://gstreamer.freedesktop.org/download/)에서 Windows MSVC x86_64의 Runtime and development headers를 설치한다. CMake는 기본 사용자/시스템 설치 경로를 검색한다. 다른 경로라면 `-DGSTREAMER_ROOT=C:/path/to/gstreamer`를 지정한다.
 
-VS Code의 CMake Tools에서 Configure와 Debug Build를 실행한다. 현재 `.vscode/settings.json`의 Qt Kit 설정을 사용한다. 명령행에서는 CMake 실행 파일이 PATH에 있어야 한다.
+**빌드 전에 Windows 사용자 환경변수 `QT_ROOT`를 등록한다.** 값은 Qt 설치 루트나 `bin` 폴더가 아니라 설치한 MSVC Kit 폴더까지 지정한다. 기본 위치에 Qt 6.11.3을 설치한 예시는 다음과 같다.
+
+```text
+변수 이름: QT_ROOT
+변수 값: C:\Qt\6.11.3\msvc2022_64
+```
+
+Windows의 **시스템 환경 변수 편집 → 환경 변수 → 사용자 변수 → 새로 만들기**에서 등록한다. 실제 설치 위치가 다르면 그 경로를 사용한다. 등록·변경 후 VS Code를 완전히 종료했다가 다시 연다. 기존 빌드 캐시가 있으면 명령 팔레트에서 **CMake: Delete Cache and Reconfigure**를 실행한다.
+
+`.vscode/settings.json`의 CMake 구성과 `.vscode/launch.json`의 디버그 실행 경로는 모두 `QT_ROOT`를 참조한다. VS Code의 CMake Tools에서 Configure와 Debug Build를 실행한다. PowerShell 명령행에서는 CMake 실행 파일이 PATH에 있어야 하며, Qt 경로를 다음과 같이 전달한다.
 
 ```powershell
-cmake -S . -B build -DCMAKE_PREFIX_PATH=C:/Qt/6.11.2/msvc2022_64
+cmake -S . -B build "-DCMAKE_PREFIX_PATH=$env:QT_ROOT"
 cmake --build build --config Debug
 ```
 
@@ -48,7 +57,7 @@ video:
 
 ### 추적 메타데이터와 BBox
 
-GUI는 기본 UDP **5001**에서 **LWIR** 메타데이터를 수신한다. 헤더는 28바이트(Magic 4, Frame ID 8, RTP timestamp 4, guiStartedUs 8, Track count 4), Track은 25바이트(ID 4, xywh float32 16, Class ID 1, Confidence float32 4)다. Version·메시지 종류·원본 크기·Detection count는 전송하지 않는다. 다중 바이트 필드는 Big Endian이며 원본 좌표계는 640×480 고정이다. Track ID 0은 무효, Class ID 255는 Unknown이다.
+GUI는 기본 UDP **5001**에서 **LWIR** 메타데이터를 수신한다. 헤더는 28바이트(Magic 4, Frame ID 8, RTP timestamp 4, guiStartedUs 8, Track count 4), Track은 25바이트(ID 4, xywh float32 16, Class ID 1, Confidence float32 4)다. Version·메시지 종류·원본 크기·Detection count는 전송하지 않는다. 다중 바이트 필드는 Big Endian이며 원본 좌표계는 640×480 고정이다. Frame ID 0인 패킷은 전체 폐기한다. Track ID 0은 해당 Track만 제외하며, Class ID 255는 정상적인 Unknown이다.
 
 보드 송신부도 이 형식을 사용해야 한다. 기존 LWIM v2는 호환되지 않는다. 보드 `gui.metadata.enabled`를 `true`, `gui.metadata.host`를 PC IP, `gui.metadata.port`를 `5001`로 맞춘다. 영상 UDP 5000과 메타데이터 UDP 5001 모두 PC에 도달해야 한다. 수신 포트는 `--metadata-port`로 변경할 수 있다.
 
@@ -62,11 +71,13 @@ BBox는 원본 영상의 **왼쪽 위 x, y, width, height** 좌표다. 영상과
 .\build\Debug\pc-application.exe --config config/pc-application.yaml --class-names config/class_names.txt
 ```
 
-영상과 메타데이터는 RTP timestamp로 대응한다. 영상은 대기 없이 표시하며, 늦게 도착한 메타데이터는 현재 표시 중인 timestamp가 같을 때만 박스를 갱신한다. 다른 프레임의 박스는 재사용하지 않으며, 캐시는 최대 128개·500ms로 제한한다. 영상 크기가 640×480이 아니면 박스를 적용하지 않는다. 수신 stream 변경 시 대응 상태를 초기화한다.
+영상과 메타데이터는 RTP timestamp로 대응한다. 영상은 대기 없이 표시하며, 늦게 도착한 메타데이터는 현재 표시 중인 timestamp가 같을 때만 박스를 갱신한다. 다른 프레임의 박스는 재사용하지 않으며, 캐시는 최대 128개·500ms로 제한한다. 이 수치와 만료 동작은 **실측 전 PoC 설정**이며 최종 확정 정책이 아니다. 영상 크기가 640×480이 아니면 박스를 적용하지 않는다. 수신 stream 변경 시 대응 상태를 초기화한다.
 
 화면 밖 bbox는 영상 영역으로 자르고, 폭·높이 0 또는 잘라낸 뒤 빈 박스는 표시하지 않는다. NaN/Inf·음수 크기·Confidence 범위(0~1) 초과·Track ID 0은 해당 Track만 제외한다. 패킷 Magic·길이·count가 잘못된 경우 패킷 전체를 폐기한다. Wire의 Track count와 검증 후 표시되는 박스 수는 다를 수 있다. guiStartedUs는 송신 작업 시작 시각이며 이것만으로 네트워크 지연을 계산하지 않는다.
 
-`Metadata FPS`는 유효 패킷 수신율이며, `Track Count`는 현재 영상에 대응된 표시 박스 수다. GUI는 들어온 메타데이터만 사용하며, 검출 결과를 자체 생성하지 않는다. 대상 제어 명령 송신은 이번 수신·표시 기능과 별개다.
+`Metadata FPS`는 유효 패킷 수신율이다. `Track Count`는 현재 영상에 대응된 메타데이터의 **전송 레코드 수**이며, 툴팁에서 검증·클리핑 후 **표시 박스 수**를 별도로 확인한다. 예를 들어 3개를 수신하고 2개를 제외했다면 값은 `3`, 툴팁의 표시 수는 `1`이다. 정상적인 Track 0개 패킷은 `0`, 대응 메타데이터가 없거나 만료된 경우는 `--`로 구분한다.
+
+Detection count는 수신·추정·표시하지 않는다. `Metadata Loss`, `Video Missing`, `Sync Miss`의 실제 집계는 아직 미구현이므로 `--`로 표시하며 툴팁에도 미구현 상태를 명시한다. GUI는 들어온 메타데이터만 사용하며, 표시 제외나 메타데이터 부재를 보드의 TargetLost 상태로 해석하지 않는다. 대상 제어 명령 송신은 이번 수신·표시 기능과 별개다.
 
 PC 내부에서 이동하는 합성 영상과 박스를 함께 확인하려면 YAML의 코덱을 `h264`로 맞추고 GUI를 실행한 뒤 별도 터미널에서 다음 명령을 실행한다.
 
@@ -239,7 +250,7 @@ ms 분석은 같은 PC의 Monotonic 시각 차이로 수신 처리 시간을 계
 수동 시험용 수신기와 송신기를 닫고 프로젝트 루트에서 실행한다. CMake와 CTest가 PATH에 있어야 하며, 시험은 별도의 UDP 15000 포트를 사용한다.
 
 ```powershell
-cmake -S . -B build -DBUILD_TESTING=ON
+cmake -S . -B build "-DCMAKE_PREFIX_PATH=$env:QT_ROOT" -DBUILD_TESTING=ON
 cmake --build build --config Debug
 ctest --test-dir build -C Debug --output-on-failure
 ```
@@ -254,6 +265,7 @@ ctest --test-dir build -C Debug --output-on-failure
 | --- | --- |
 | 실행 파일을 찾을 수 없음 | 터미널의 현재 폴더가 프로젝트 루트인지, Debug Build가 완료됐는지 확인한다. |
 | `cmake` / `ctest` 명령을 찾을 수 없음 | 개발환경의 PATH를 확인한다. 빌드는 VS Code CMake Tools에서도 실행할 수 있다. |
+| `Qt6Config.cmake`를 찾을 수 없음 | `QT_ROOT`가 실제 Qt의 `msvc2022_64` 폴더를 가리키는지 확인한다. 환경변수 변경 후 VS Code를 다시 열고 CMake 캐시를 삭제한 뒤 재설정한다. |
 | `No video`가 계속 표시됨 | 수신기를 먼저 실행했는지, Mock Sender가 아직 송신 중인지 확인한다. 기본 송신 주소는 `127.0.0.1`, 양쪽 기본 영상 포트는 UDP 5000이다. |
 | DLL 또는 GStreamer Plugin 오류 | Configure와 Debug Build를 다시 실행해 Runtime 배치를 완료한다. 실행 파일 옆의 DLL과 `gstreamer-1.0` 폴더가 필요하다. |
 | CSV가 없거나 Header만 있음 | Trace 옵션과 출력 폴더를 확인하고, 수신기를 정상 종료한 뒤 확인한다. 최신 Frame 요약은 실행 중 미확정 상태일 수 있다. |

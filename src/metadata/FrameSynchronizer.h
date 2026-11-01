@@ -18,12 +18,13 @@ public:
 
 signals:
     void frameReady(const QImage &image, const QVector<TrackBox> &tracks, quint64 deliveryId);
-    void trackCountChanged(int count);
+    void trackCountsChanged(quint32 wireCount, qsizetype displayedCount, bool metadataAvailable);
 
 private:
     void expire();
     void display();
     struct Entry { TrackingMetadata metadata; qint64 receivedMs; };
+    // Provisional PoC values; final lifetime/capacity require Ethernet measurements.
     static constexpr qint64 LifetimeMs = 500;
     static constexpr int Capacity = 128;
     QHash<quint32, Entry> cache;
@@ -32,5 +33,5 @@ private:
     QImage image;
     qint64 timestamp = -1;
     quint64 frameId = 0;
-    bool hasOverlay = false;
+    bool hasMetadata = false;
 };

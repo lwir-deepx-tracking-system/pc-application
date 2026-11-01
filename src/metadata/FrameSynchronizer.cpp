@@ -15,8 +15,8 @@ void FrameSynchronizer::clear()
     image = {};
     timestamp = -1;
     frameId = 0;
-    hasOverlay = false;
-    emit trackCountChanged(0);
+    hasMetadata = false;
+    emit trackCountsChanged(0, 0, false);
 }
 
 void FrameSynchronizer::submitVideo(const QImage &next, qint64 rtpTimestamp, quint64 deliveryId)
@@ -48,17 +48,22 @@ void FrameSynchronizer::expire()
         if (now - it->receivedMs >= LifetimeMs) it = cache.erase(it);
         else ++it;
     }
-    if (hasOverlay && (timestamp < 0 || !cache.contains(quint32(timestamp)))) display();
+    if (hasMetadata && (timestamp < 0 || !cache.contains(quint32(timestamp)))) display();
 }
 
 void FrameSynchronizer::display()
 {
     QVector<TrackBox> tracks;
+    quint32 wireCount = 0;
+    hasMetadata = false;
     if (!image.isNull() && timestamp >= 0) {
         const auto found = cache.constFind(quint32(timestamp));
-        if (found != cache.cend() && found->metadata.imageSize == image.size()) tracks = found->metadata.tracks;
+        if (found != cache.cend()) {
+            hasMetadata = true;
+            wireCount = found->metadata.trackCount;
+            if (found->metadata.imageSize == image.size()) tracks = found->metadata.tracks;
+        }
     }
-    hasOverlay = !tracks.isEmpty();
-    emit trackCountChanged(tracks.size());
+    emit trackCountsChanged(wireCount, tracks.size(), hasMetadata);
     if (!image.isNull()) emit frameReady(image, tracks, frameId);
 }
