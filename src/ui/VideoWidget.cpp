@@ -96,6 +96,7 @@ void VideoWidget::paintEvent(QPaintEvent *)
 
 void VideoWidget::mousePressEvent(QMouseEvent *event)
 {
+    if (event->button() == Qt::LeftButton) setFocus(Qt::MouseFocusReason);
     if (event->button() != Qt::LeftButton || image.isNull()) {
         QWidget::mousePressEvent(event);
         return;
@@ -113,8 +114,8 @@ void VideoWidget::mousePressEvent(QMouseEvent *event)
         }
     }
     if (hitCount == 1)
-        emit targetSetRequested(hitId);
+        emit autoRequested(hitId);
     else if (hitCount == 0)
-        emit targetClearRequested();
+        emit manualRequested();
     // Multiple hits stay unresolved until the overlap selection policy is approved.
 }

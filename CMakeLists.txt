@@ -10,6 +10,16 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
 qt_standard_project_setup()
 option(BUILD_TESTING "Build application tests" OFF)
 
+qt_add_library(control-client STATIC
+    src/control/ControlProtocol.cpp src/control/ControlProtocol.h
+    src/control/ControlClient.cpp src/control/ControlClient.h src/control/ControlSettings.h)
+target_include_directories(control-client PUBLIC src)
+target_link_libraries(control-client PUBLIC Qt6::Core Qt6::Network)
+
+qt_add_library(manual-input STATIC src/control/ManualInputHandler.cpp src/control/ManualInputHandler.h)
+target_include_directories(manual-input PUBLIC src)
+target_link_libraries(manual-input PUBLIC Qt6::Widgets)
+
 find_package(yaml-cpp 0.8 CONFIG QUIET)
 if(NOT yaml-cpp_FOUND)
     include(FetchContent)
@@ -64,13 +74,19 @@ target_link_libraries(metadata-receiver PUBLIC Qt6::Gui Qt6::Network)
 
 qt_add_library(application-controller STATIC src/app/ApplicationController.cpp src/app/ApplicationController.h)
 target_include_directories(application-controller PUBLIC src)
-target_link_libraries(application-controller PUBLIC video-receiver metadata-receiver)
+target_link_libraries(application-controller PUBLIC video-receiver metadata-receiver control-client)
 
-function(deploy_runtime target)
+function(deploy_qt_runtime target)
     if(WIN32)
         add_custom_command(TARGET ${target} POST_BUILD
             COMMAND Qt6::windeployqt --$<IF:$<CONFIG:Debug>,debug,release> --no-translations "$<TARGET_FILE:${target}>"
             VERBATIM)
+    endif()
+endfunction()
+
+function(deploy_runtime target)
+    deploy_qt_runtime(${target})
+    if(WIN32)
         file(GLOB gst_dlls "${GSTREAMER_ROOT}/bin/*.dll")
         add_custom_command(TARGET ${target} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different ${gst_dlls} "$<TARGET_FILE_DIR:${target}>"
@@ -89,9 +105,7 @@ function(deploy_runtime target)
     endif()
 endfunction()
 
-qt_add_executable(pc-application
-    src/main.cpp
-    src/app/GuiPreview.cpp src/app/GuiPreview.h
+qt_add_library(application-ui STATIC
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
     src/ui/VideoWidget.cpp
@@ -99,6 +113,10 @@ qt_add_executable(pc-application
     src/ui/ClassLabels.cpp
     src/ui/ClassLabels.h
 )
+target_include_directories(application-ui PUBLIC src)
+target_link_libraries(application-ui PUBLIC Qt6::Widgets control-client)
+
+qt_add_executable(pc-application src/main.cpp src/app/GuiPreview.cpp src/app/GuiPreview.h)
 
 target_link_libraries(pc-application
     PRIVATE
@@ -108,6 +126,8 @@ target_link_libraries(pc-application
         metadata-receiver
         app-config
         application-controller
+        manual-input
+        application-ui
 )
 
 deploy_runtime(pc-application)
@@ -124,15 +144,29 @@ qt_add_executable(mock-video-sender tools/mock/video/main.cpp)
 target_link_libraries(mock-video-sender PRIVATE video-receiver Qt6::Network)
 deploy_runtime(mock-video-sender)
 
+qt_add_library(mock-control STATIC tools/mock/control/MockControlServer.cpp tools/mock/control/MockControlServer.h)
+target_include_directories(mock-control PUBLIC tools/mock/control)
+target_link_libraries(mock-control PUBLIC control-client)
+qt_add_executable(mock-control-server tools/mock/control/main.cpp)
+set_target_properties(mock-control-server PROPERTIES WIN32_EXECUTABLE FALSE)
+target_link_libraries(mock-control-server PRIVATE mock-control)
+deploy_qt_runtime(mock-control-server)
+
 if(BUILD_TESTING)
     enable_testing()
     find_package(Qt6 REQUIRED COMPONENTS Test)
-    qt_add_executable(video-integration-test tests/integration/VideoReceiverTest.cpp
-        src/ui/MainWindow.cpp src/ui/MainWindow.h src/ui/VideoWidget.cpp src/ui/VideoWidget.h
-        src/ui/ClassLabels.cpp src/ui/ClassLabels.h)
+    qt_add_executable(video-integration-test tests/integration/VideoReceiverTest.cpp)
     set_target_properties(video-integration-test PROPERTIES WIN32_EXECUTABLE FALSE)
-    target_link_libraries(video-integration-test PRIVATE application-controller app-config Qt6::Widgets Qt6::Test)
+    target_link_libraries(video-integration-test PRIVATE application-controller application-ui app-config Qt6::Widgets Qt6::Test)
     add_dependencies(video-integration-test pc-application mock-video-sender)
     deploy_runtime(video-integration-test)
     add_test(NAME video-integration COMMAND video-integration-test -o -,txt)
+
+    qt_add_executable(control-test tests/control/ControlTest.cpp)
+    set_target_properties(control-test PROPERTIES WIN32_EXECUTABLE FALSE)
+    target_link_libraries(control-test PRIVATE application-controller application-ui manual-input mock-control app-config Qt6::Test)
+    add_dependencies(control-test pc-application mock-control-server)
+    deploy_runtime(control-test)
+    add_test(NAME control COMMAND control-test -o -,txt)
+    set_tests_properties(control video-integration PROPERTIES RUN_SERIAL TRUE)
 endif()

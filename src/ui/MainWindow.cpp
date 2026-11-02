@@ -8,6 +8,7 @@
 #include <QPushButton>
 #include <QRegularExpressionValidator>
 #include <QSignalBlocker>
+#include <QStatusBar>
 #include <QVBoxLayout>
 #include <limits>
 
@@ -48,9 +49,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
         QPushButton:hover { background: #354961; }
         QPushButton:pressed { background: #182638; }
         QPushButton:disabled { color: #6c7787; background: #18202c; }
-        QPushButton#trackButton { background: #245e51; border-color: #398975; }
-        QPushButton#trackButton:hover { background: #307765; }
-        QPushButton#trackButton:disabled { background: #182c28; color: #6c7787; }
+        QPushButton#autoButton { background: #245e51; border-color: #398975; }
+        QPushButton#autoButton:hover { background: #307765; }
+        QPushButton#autoButton:disabled { background: #182c28; color: #6c7787; }
     )");
     auto *central = new QWidget;
     central->setObjectName("central");
@@ -65,14 +66,20 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     panel->setFixedWidth(280);
     auto *panelLayout = new QVBoxLayout(panel);
     panelLayout->setContentsMargins(0, 0, 0, 0);
-    panelLayout->setSpacing(18);
+    panelLayout->setSpacing(10);
     layout->addWidget(panel);
 
     auto *statusGroup = new QGroupBox("SYSTEM STATUS");
     auto *statusLayout = new QVBoxLayout(statusGroup);
-    statusLayout->setSpacing(18);
-    addValueRow(statusLayout, "Orange Pi", "Control unavailable");
-    addValueRow(statusLayout, "Gimbal", "Unknown");
+    statusLayout->setSpacing(8);
+    connectionLabel = addValueRow(statusLayout, "Control", "Disconnected");
+    connectionLabel->setObjectName("controlConnection");
+    modeLabel = addValueRow(statusLayout, "Mode", "--");
+    modeLabel->setObjectName("controlMode");
+    targetLabel = addValueRow(statusLayout, "Target", "--");
+    gimbalLabel = addValueRow(statusLayout, "Gimbal", "--");
+    gimbalLabel->setObjectName("gimbalState");
+    errorLabel = addValueRow(statusLayout, "Error", "--");
     panelLayout->addWidget(statusGroup);
 
     auto *targetGroup = new QGroupBox("TARGET CONTROL");
@@ -89,19 +96,22 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     trackCombo->setToolTip("Track ID: 1 - 4294967295");
     targetLayout->addWidget(trackCombo);
     auto *buttons = new QHBoxLayout;
-    trackButton = new QPushButton("Track");
-    trackButton->setObjectName("trackButton");
-    auto *clearButton = new QPushButton("Clear");
-    clearButton->setObjectName("clearButton");
-    buttons->addWidget(trackButton);
-    buttons->addWidget(clearButton);
+    autoButton = new QPushButton("AUTO");
+    autoButton->setObjectName("autoButton");
+    manualButton = new QPushButton("MANUAL");
+    manualButton->setObjectName("manualButton");
+    buttons->addWidget(autoButton);
+    buttons->addWidget(manualButton);
     targetLayout->addLayout(buttons);
+    auto *hint = new QLabel("Click video: arrow keys move, Space returns home");
+    hint->setWordWrap(true);
+    targetLayout->addWidget(hint);
     panelLayout->addWidget(targetGroup);
 
     panelLayout->addStretch();
     auto *diagnosticGroup = new QGroupBox("DIAGNOSTICS");
     auto *diagnosticLayout = new QVBoxLayout(diagnosticGroup);
-    diagnosticLayout->setSpacing(14);
+    diagnosticLayout->setSpacing(8);
     videoCodecLabel = addValueRow(diagnosticLayout, "Video codec", "--");
     videoCodecLabel->setObjectName("videoCodec");
     videoFpsLabel = addValueRow(diagnosticLayout, "Video FPS", "--");
@@ -119,17 +129,17 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     panelLayout->addWidget(diagnosticGroup);
 
     connect(trackCombo, &QComboBox::editTextChanged, this, [this] {
-        trackButton->setEnabled(enteredTrackId() != 0);
+        updateControlActions();
     });
-    connect(trackButton, &QPushButton::clicked, this, [this] {
-        requestTargetSet(enteredTrackId());
+    connect(autoButton, &QPushButton::clicked, this, [this] {
+        requestAuto(enteredTrackId());
     });
-    connect(clearButton, &QPushButton::clicked, this, &MainWindow::requestTargetClear);
-    connect(videoWidget, &VideoWidget::targetSetRequested, this, &MainWindow::requestTargetSet);
-    connect(videoWidget, &VideoWidget::targetClearRequested, this, &MainWindow::requestTargetClear);
+    connect(manualButton, &QPushButton::clicked, this, &MainWindow::requestManual);
+    connect(videoWidget, &VideoWidget::autoRequested, this, &MainWindow::requestAuto);
+    connect(videoWidget, &VideoWidget::manualRequested, this, &MainWindow::requestManual);
     connect(videoWidget, &VideoWidget::framePainted, this, &MainWindow::framePainted);
 
-    trackButton->setEnabled(enteredTrackId() != 0);
+    updateControlActions();
 }
 
 void MainWindow::setVideoFps(double fps)
@@ -186,7 +196,7 @@ void MainWindow::setDisplayFrame(const QImage &image, const QVector<TrackBox> &t
     trackCombo->addItems(items);
     trackCombo->setCurrentIndex(-1);
     trackCombo->setEditText(typedId);
-    trackButton->setEnabled(enteredTrackId() != 0);
+    updateControlActions();
 }
 
 quint32 MainWindow::enteredTrackId() const
@@ -200,16 +210,15 @@ quint32 MainWindow::enteredTrackId() const
         ? static_cast<quint32>(id) : 0;
 }
 
-void MainWindow::requestTargetSet(quint32 trackId)
+void MainWindow::requestAuto(quint32 trackId)
 {
-    if (trackId == 0)
-        return;
-    emit targetSetRequested(trackId);
+    if (!trackId || !controlReady || !stateAvailable || blocked()) return;
+    emit autoRequested(trackId);
 }
 
-void MainWindow::requestTargetClear()
+void MainWindow::requestManual()
 {
-    emit targetClearRequested();
+    if (controlReady && stateAvailable && !blocked()) emit manualRequested();
 }
 
 void MainWindow::resetReception()
@@ -220,3 +229,63 @@ void MainWindow::resetReception()
     metadataFpsLabel->setText("--");
     videoProcessingLabel->setText("--");
 }
+
+QWidget *MainWindow::manualInputSurface() const { return videoWidget; }
+
+bool MainWindow::blocked() const
+{
+    return board.gimbal == Control::GimbalState::Homing || board.gimbal == Control::GimbalState::Error;
+}
+
+void MainWindow::updateControlActions()
+{
+    const bool available = controlReady && stateAvailable && !blocked();
+    autoButton->setEnabled(available && enteredTrackId() != 0);
+    manualButton->setEnabled(available);
+}
+
+void MainWindow::setControlConnection(Control::Connection connection)
+{
+    controlReady = connection == Control::Connection::Ready;
+    switch (connection) {
+    case Control::Connection::Disconnected: connectionLabel->setText("Disconnected"); break;
+    case Control::Connection::Connecting: connectionLabel->setText("Connecting"); break;
+    case Control::Connection::AwaitingState: connectionLabel->setText("Waiting for state"); break;
+    case Control::Connection::Ready: connectionLabel->setText("Connected"); break;
+    }
+    if (!controlReady) {
+        stateAvailable = false;
+        modeLabel->setText("--");
+        targetLabel->setText("--");
+        gimbalLabel->setText("--");
+        errorLabel->setText("--");
+    }
+    updateControlActions();
+}
+
+void MainWindow::setBoardState(const Control::BoardState &state)
+{
+    board = state;
+    stateAvailable = true;
+    modeLabel->setText(state.mode == Control::Mode::Auto ? "AUTO" : "MANUAL");
+    const char *target = state.target == Control::TargetState::Tracking ? "TRACKING" : "LOST";
+    targetLabel->setText(state.selectedTargetId ? QString("%1 / %2").arg(state.selectedTargetId).arg(target) : "None");
+    switch (state.gimbal) {
+    case Control::GimbalState::Idle: gimbalLabel->setText("IDLE"); break;
+    case Control::GimbalState::ManualMoving: gimbalLabel->setText("MANUAL MOVING"); break;
+    case Control::GimbalState::AutoTracking: gimbalLabel->setText("AUTO TRACKING"); break;
+    case Control::GimbalState::Homing: gimbalLabel->setText("HOMING"); break;
+    case Control::GimbalState::Hold: gimbalLabel->setText("HOLD"); break;
+    case Control::GimbalState::Error: gimbalLabel->setText("ERROR"); break;
+    }
+    errorLabel->setText(state.errorCode ? QString::number(state.errorCode) : "None");
+    updateControlActions();
+}
+
+void MainWindow::showCommandResult(const Control::Ack &ack)
+{
+    if (ack.category == Control::Category::System) return;
+    statusBar()->showMessage(Control::commandName(ack.category, ack.command) + ": " + Control::resultName(ack.result), 5000);
+}
+
+void MainWindow::showControlError(const QString &message) { statusBar()->showMessage(message, 5000); }

@@ -59,9 +59,39 @@ video:
 
 `src/app/ApplicationController`는 영상·메타데이터 수신부와 `FrameSynchronizer`를 소유하고 시작·종료·초기화를 관리한다. 시작 실패 시 열린 소켓을 정리하며, 정지·오류·stream 변경 시 표시 상태를 초기화한다. `main.cpp`는 실행 설정과 UI 연결을 담당한다.
 
-`MainWindow` / `VideoWidget`은 표시와 사용자 입력을 처리한다. 타깃 선택·해제는 요청 signal이며 아직 보드로 전송하지 않는다. 향후 TCP client는 controller에서 연결하고, 실제 운용 상태는 보드의 INIT / STATUS로 갱신한다. 영상 수신 여부와 보드 제어 연결 상태는 별개다.
+`MainWindow` / `VideoWidget`은 표시와 사용자 입력을 처리한다. `ApplicationController`가 `ControlClient`에 운용 요청을 전달하며, 실제 운용 상태는 보드의 INIT / STATUS로 갱신한다. 영상 수신 여부와 TCP 제어 연결 상태는 별개다. `ControlProtocol`은 직렬화·파싱을, `ManualInputHandler`는 키 상태와 방향 합성을 담당한다.
 
 JPEG / H.264 수신 파이프라인 생성은 `src/video/VideoPipeline`에 모았다. 프리뷰 영상은 `src/app/GuiPreview`에서 생성하며 `--gui-preview`로만 사용한다. 이번 구조 변경으로 wire 형식은 바뀌지 않는다.
+
+### TCP 제어 시험
+
+현재 PC는 TCP 제어를 구현했으며, 실제 runtime 송신부·제어부는 별도 수정과 검증이 필요하다. 기본 YAML의 `control.host`는 로컬 Mock용 `127.0.0.1`, 포트는 `5002`다. 실제 짐벌에는 접근하지 않는다.
+
+프로젝트 루트에서 별도 터미널로 각각 실행한다.
+
+```powershell
+.\build\Debug\mock-control-server.exe
+```
+
+```powershell
+.\build\Debug\pc-application.exe --config config/pc-application.yaml
+```
+
+```powershell
+.\build\Debug\mock-video-sender.exe --codec h264 --metadata-port 5001 --frames 3000
+```
+
+- Track ID `7`을 입력하거나 박스를 클릭해 AUTO를 요청한다. 기본 Mock의 유효 ID는 `3,7,15,22`다. 없는 ID는 거절하고 기존 상태를 유지한다.
+- MANUAL 버튼 또는 영상의 빈 영역 클릭으로 수동 모드를 요청한다.
+- 영상 영역을 클릭한 뒤 방향키로 이동한다. 두 축 동시 입력은 대각 방향, 같은 축의 반대 키는 상쇄된다. 키를 모두 놓으면 `(0,0)`을 보낸다. 키 유지·자동 반복으로 명령을 반복 송신하지 않는다.
+- AUTO 중 방향키 입력도 수동 개입 요청으로 전달하며, 실제 타깃 해제와 MANUAL 전환은 보드가 판단한다.
+- Space로 기준 위치 복귀를 요청한다. 별도 HOME 버튼은 두지 않는다. Mock의 800ms HOME은 시뮬레이션이며 장비의 완료 판단 시간이 아니다.
+- Track ID 편집 중에는 방향키·Space가 제어 명령으로 전송되지 않는다. 영상 영역에서 다른 곳으로 포커스가 옮겨지면 이동 입력을 해제한다.
+- 화면 모드·타깃·짐벌 상태는 ACK가 아닌 INIT / STATUS로 갱신한다. 제어 연결이나 상태 정보가 없거나 HOMING·ERROR 상태이면 조작을 비활성화한다.
+
+기존 YAML의 `control`에서 연결 여부·주소·포트와 시험용 시간을 설정한다. `control`을 생략하거나 `enabled: false`이면 영상 수신만 실행한다. `ping_interval_ms`, `ack_timeout_ms`, `connect_timeout_ms`, `reconnect_interval_ms`는 실측 전 초기값이다. ACK timeout이면 재접속하며 이전 명령·키 상태를 복원하지 않는다. MOVE는 ACK 대상이 아니고 PING은 이동 입력과 독립적으로 실행한다.
+
+Mock 서버 옵션: `--host`, `--port`, `--track-ids`, `--home-ms`. `--port 0`이면 사용 가능한 포트를 출력한다. 실제 보드와 연동할 때는 보드가 동일 TCP 규격과 상태 정책을 구현한 뒤 `control.host`를 보드 IP로 변경한다.
 
 ### 추적 메타데이터와 BBox
 
@@ -221,11 +251,11 @@ Packet 기록은 `build/receiver-packets.csv`, `build/sender-packets.csv`에 저
 .\build\Debug\pc-application.exe --gui-preview
 ```
 
-- BBox를 클릭하면 해당 Track ID의 Target Set 요청이 발생한다.
-- 영상의 BBox가 없는 부분을 클릭하면 Target Clear 요청이 발생한다.
-- Track ID를 입력하거나 선택한 뒤 Track 버튼으로 요청할 수 있다.
+- 일반 실행에서는 BBox를 클릭하면 해당 Track ID의 AUTO 요청이 발생한다.
+- 일반 실행에서는 영상의 BBox가 없는 부분을 클릭하면 MANUAL 요청이 발생한다.
+- Track ID를 입력하거나 선택한 뒤 AUTO 버튼으로 요청할 수 있다.
 
-클릭 요청은 디버그 로그의 `TARGET_SET(ID) [GUI mock]`, `TARGET_CLEAR [GUI mock]`으로 확인한다. VS Code 디버거로 Preview를 실행하려면 `.vscode/launch.json`의 `Debug pc-application` 구성에 `"args": ["--gui-preview"]`를 추가한 뒤 F5를 누른다. 영상 수신 시험으로 돌아갈 때는 해당 인수를 제거한다.
+Preview는 레이아웃 확인용이며 영상 수신과 TCP 연결을 시작하지 않는다. 제어 시험은 위의 Mock 서버·일반 GUI 실행 절차를 사용한다. VS Code 디버거로 Preview를 실행하려면 `.vscode/launch.json`의 `Debug pc-application` 구성에 `"args": ["--gui-preview"]`를 추가한 뒤 F5를 누른다. 일반 실행으로 돌아갈 때는 해당 인수를 제거한다.
 
 ## 계측 CSV 사용
 

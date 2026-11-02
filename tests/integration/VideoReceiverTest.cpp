@@ -359,8 +359,8 @@ private slots:
         QTest::qWait(30);
         const auto rect = widget.videoRect();
         const double scale = rect.width() / sourceSize.width();
-        QSignalSpy selected(&widget, &VideoWidget::targetSetRequested);
-        QSignalSpy cleared(&widget, &VideoWidget::targetClearRequested);
+        QSignalSpy selected(&widget, &VideoWidget::autoRequested);
+        QSignalSpy cleared(&widget, &VideoWidget::manualRequested);
         QTest::mouseClick(&widget, Qt::LeftButton, Qt::NoModifier,
             (rect.topLeft() + QPointF(200, 100) * scale).toPoint());
         QCOMPARE(selected.count(), 1);
@@ -465,6 +465,8 @@ private slots:
     void stableTrackList()
     {
         MainWindow window;
+        window.setBoardState({});
+        window.setControlConnection(Control::Connection::Ready);
         auto *combo = window.findChild<QComboBox *>("trackCombo");
         QImage image(640, 480, QImage::Format_RGB888);
         image.fill(Qt::gray);
@@ -474,8 +476,8 @@ private slots:
         window.setDisplayFrame(image, {{7, QRectF(105, 50, 200, 100), 0}}, 2);
         QCOMPARE(removed.count(), 0); // A moving box must not rebuild an open selection list.
         QCOMPARE(combo->currentText(), QString("4294967295"));
-        QSignalSpy selected(&window, &MainWindow::targetSetRequested);
-        QTest::mouseClick(window.findChild<QPushButton *>("trackButton"), Qt::LeftButton);
+        QSignalSpy selected(&window, &MainWindow::autoRequested);
+        QTest::mouseClick(window.findChild<QPushButton *>("autoButton"), Qt::LeftButton);
         QCOMPARE(selected.count(), 1);
         QCOMPARE(selected[0][0].toUInt(), quint32(0xffffffff));
         window.resetReception();

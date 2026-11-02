@@ -2,6 +2,7 @@
 #include "ui/MainWindow.h"
 #include "app/ApplicationController.h"
 #include "app/GuiPreview.h"
+#include "control/ManualInputHandler.h"
 #include "config/AppConfig.h"
 #include <QCommandLineParser>
 #include <QDebug>
@@ -66,11 +67,17 @@ int main(int argc, char *argv[])
     QObject::connect(&controller, &ApplicationController::errorOccurred, &window,
         [](const QString &message) { qCritical().noquote() << message; });
     QObject::connect(&window, &MainWindow::framePainted, &controller, &ApplicationController::recordPaint);
-    // User intent stays separate from board state; TCP control is not implemented yet.
-    QObject::connect(&window, &MainWindow::targetSetRequested, &controller,
-        [](quint32 id) { qInfo() << "TARGET_SET" << id << "[control unavailable]"; });
-    QObject::connect(&window, &MainWindow::targetClearRequested, &controller,
-        [] { qInfo() << "TARGET_CLEAR [control unavailable]"; });
+    ManualInputHandler input(window.manualInputSurface());
+    QObject::connect(&input, &ManualInputHandler::moveRequested, &controller, &ApplicationController::sendMove);
+    QObject::connect(&input, &ManualInputHandler::homeRequested, &controller, &ApplicationController::requestHome);
+    QObject::connect(&controller, &ApplicationController::inputResetRequested, &input, &ManualInputHandler::reset);
+    QObject::connect(&controller, &ApplicationController::manualInputEnabledChanged, &input, &ManualInputHandler::setEnabled);
+    QObject::connect(&window, &MainWindow::autoRequested, &controller, &ApplicationController::requestAuto);
+    QObject::connect(&window, &MainWindow::manualRequested, &controller, &ApplicationController::requestManual);
+    QObject::connect(&controller, &ApplicationController::controlConnectionChanged, &window, &MainWindow::setControlConnection);
+    QObject::connect(&controller, &ApplicationController::boardStateChanged, &window, &MainWindow::setBoardState);
+    QObject::connect(&controller, &ApplicationController::commandFinished, &window, &MainWindow::showCommandResult);
+    QObject::connect(&controller, &ApplicationController::controlError, &window, &MainWindow::showControlError);
     QObject::connect(&app, &QCoreApplication::aboutToQuit, &controller, &ApplicationController::stop);
     if (parser.isSet("gui-preview")) {
         showGuiPreview(window);
@@ -83,6 +90,7 @@ int main(int argc, char *argv[])
         settings.tracePath = parser.value("video-trace");
         settings.packetTracePath = parser.value("video-packet-trace");
         if (!controller.start(settings)) return 1;
+        controller.startControl(config.control);
     }
     window.show();
 

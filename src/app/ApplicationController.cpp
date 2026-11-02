@@ -17,6 +17,28 @@ ApplicationController::ApplicationController(QObject *parent) : QObject(parent)
         [this](const QString &message) { fail("Video: " + message); });
     connect(&metadata, &MetadataReceiver::errorOccurred, this,
         [this](const QString &message) { fail("Metadata: " + message); });
+    connect(&control, &ControlClient::connectionChanged, this, [this](Control::Connection connection) {
+        if (connection != Control::Connection::Ready) {
+            inputMode = Control::Mode::Manual;
+            emit inputResetRequested();
+        }
+        emit manualInputEnabledChanged(control.canControl());
+        emit controlConnectionChanged(connection);
+    });
+    connect(&control, &ControlClient::resetRequested, this, [this] {
+        resetStream();
+        emit inputResetRequested();
+    });
+    connect(&control, &ControlClient::boardStateChanged, this, [this](const Control::BoardState &state) {
+        // AUTO/HOME has replaced manual intent; don't emit an obsolete key-release MOVE.
+        if ((state.mode == Control::Mode::Auto && inputMode != Control::Mode::Auto) || state.gimbal == Control::GimbalState::Homing
+            || state.gimbal == Control::GimbalState::Error) emit inputResetRequested();
+        inputMode = state.mode;
+        emit boardStateChanged(state);
+        emit manualInputEnabledChanged(control.canControl());
+    });
+    connect(&control, &ControlClient::commandFinished, this, &ApplicationController::commandFinished);
+    connect(&control, &ControlClient::errorOccurred, this, &ApplicationController::controlError);
 }
 
 ApplicationController::~ApplicationController()
@@ -26,7 +48,7 @@ ApplicationController::~ApplicationController()
 
 bool ApplicationController::start(const ReceiverSettings &settings)
 {
-    stop();
+    stopReception();
     if (!settings.videoPort || !settings.metadataPort || settings.videoPort == settings.metadataPort
         || settings.latencyMs > 10000) {
         emit errorOccurred("Invalid receiver ports or jitter latency");
@@ -39,6 +61,13 @@ bool ApplicationController::start(const ReceiverSettings &settings)
 }
 
 void ApplicationController::stop()
+{
+    control.stop();
+    emit inputResetRequested();
+    stopReception();
+}
+
+void ApplicationController::stopReception()
 {
     video.stop();
     metadata.stop();
@@ -58,6 +87,18 @@ void ApplicationController::recordPaint(quint64 deliveryId, qint64 monotonicNs)
 
 void ApplicationController::fail(const QString &message)
 {
-    stop();
+    stopReception(); // A video failure must not tear down an independent control connection.
     emit errorOccurred(message);
+}
+
+void ApplicationController::startControl(const ControlSettings &settings) { control.start(settings); }
+void ApplicationController::requestAuto(quint32 id) { control.requestAuto(id); }
+void ApplicationController::requestManual() { control.requestManual(); }
+void ApplicationController::requestHome()
+{
+    if (control.requestHome()) emit inputResetRequested();
+}
+void ApplicationController::sendMove(qint8 x, qint8 y)
+{
+    if (!control.sendMove(x, y)) emit inputResetRequested();
 }

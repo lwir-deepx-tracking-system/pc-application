@@ -1,2 +1,11 @@
 video:
   codec: h264  # h264 or jpeg; must match the board sender.
+
+control:
+  enabled: true
+  host: 127.0.0.1  # Local mock server; use the board IP after runtime integration.
+  port: 5002
+  ping_interval_ms: 500
+  ack_timeout_ms: 1500
+  connect_timeout_ms: 2000
+  reconnect_interval_ms: 1000

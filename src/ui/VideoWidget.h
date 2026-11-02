@@ -18,8 +18,8 @@ public:
     void setClassLabels(const ClassLabels &labels);
 
 signals:
-    void targetSetRequested(quint32 trackId);
-    void targetClearRequested();
+    void autoRequested(quint32 trackId);
+    void manualRequested();
     void framePainted(quint64 frameId, qint64 monotonicNs);
 
 protected:
