@@ -65,10 +65,12 @@ int main(int argc, char *argv[])
     window.setVideoCodec(config.receiver.codec);
     ApplicationController controller;
     QObject::connect(&controller, &ApplicationController::frameReady, &window, &MainWindow::setDisplayFrame);
-    QObject::connect(&controller, &ApplicationController::trackCountsChanged, &window, &MainWindow::setTrackCounts);
     QObject::connect(&controller, &ApplicationController::videoFpsChanged, &window, &MainWindow::setVideoFps);
-    QObject::connect(&controller, &ApplicationController::metadataFpsChanged, &window, &MainWindow::setMetadataFps);
-    QObject::connect(&controller, &ApplicationController::processingTimeChanged, &window, &MainWindow::setVideoProcessingTime);
+    QObject::connect(&controller, &ApplicationController::videoLatencyChanged, &window, &MainWindow::setVideoLatency);
+    QObject::connect(&controller, &ApplicationController::performanceError, &window, [&window](const QString &message) {
+        qWarning().noquote() << message;
+        window.showRecordingError(message);
+    });
     QObject::connect(&controller, &ApplicationController::streamReset, &window, &MainWindow::resetReception);
     QObject::connect(&controller, &ApplicationController::errorOccurred, &window,
         [](const QString &message) { qCritical().noquote() << message; });
@@ -91,7 +93,7 @@ int main(int argc, char *argv[])
         ReceiverSettings settings = config.receiver;
         settings.tracePath = parser.value("video-trace");
         settings.packetTracePath = parser.value("video-packet-trace");
-        if (!controller.start(settings)) return 1;
+        if (!controller.start(settings, config.performance, config.control)) return 1;
         controller.startControl(config.control);
     }
     window.show();

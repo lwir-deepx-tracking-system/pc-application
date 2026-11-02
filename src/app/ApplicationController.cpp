@@ -10,9 +10,19 @@ ApplicationController::ApplicationController(QObject *parent) : QObject(parent)
     connect(&video, &VideoReceiver::streamRestarted, this, &ApplicationController::resetStream);
     connect(&synchronizer, &FrameSynchronizer::frameReady, this, &ApplicationController::frameReady);
     connect(&synchronizer, &FrameSynchronizer::trackCountsChanged, this, &ApplicationController::trackCountsChanged);
-    connect(&video, &VideoReceiver::fpsChanged, this, &ApplicationController::videoFpsChanged);
+    connect(&video, &VideoReceiver::frameObserved, &performance, &PerformanceRecorder::observeFrame);
+    connect(&video, &VideoReceiver::rtpBytesReceived, &performance, &PerformanceRecorder::addRtpBytes);
+    connect(&performance, &PerformanceRecorder::sampleReady, this, [this](const PerformanceSample &sample) {
+        emit videoFpsChanged(sample.displayFps());
+        emit videoLatencyChanged(sample.pcLatency.average());
+        emit performanceSampleReady(sample);
+    });
+    connect(&performance, &PerformanceRecorder::errorOccurred, this, &ApplicationController::performanceError);
+    connect(&control, &ControlClient::pingResponseMeasured, &performance, &PerformanceRecorder::addPingResponse);
+    connect(&control, &ControlClient::connectionLost, &performance, &PerformanceRecorder::disconnected);
+    connect(&control, &ControlClient::reconnectAttempted, &performance, &PerformanceRecorder::reconnectAttempted);
+    connect(&control, &ControlClient::ackTimedOut, &performance, &PerformanceRecorder::ackTimedOut);
     connect(&metadata, &MetadataReceiver::fpsChanged, this, &ApplicationController::metadataFpsChanged);
-    connect(&video, &VideoReceiver::processingTimeChanged, this, &ApplicationController::processingTimeChanged);
     connect(&video, &VideoReceiver::errorOccurred, this,
         [this](const QString &message) { fail("Video: " + message); });
     connect(&metadata, &MetadataReceiver::errorOccurred, this,
@@ -46,7 +56,8 @@ ApplicationController::~ApplicationController()
     stop();
 }
 
-bool ApplicationController::start(const ReceiverSettings &settings)
+bool ApplicationController::start(const ReceiverSettings &settings, const PerformanceSettings &performanceSettings,
+                                  const ControlSettings &controlSettings)
 {
     stopReception();
     if (!settings.videoPort || !settings.metadataPort || settings.videoPort == settings.metadataPort
@@ -54,6 +65,7 @@ bool ApplicationController::start(const ReceiverSettings &settings)
         emit errorOccurred("Invalid receiver ports or jitter latency");
         return false;
     }
+    performance.start(performanceSettings, settings, controlSettings);
     if (!metadata.start(settings.metadataPort, settings.metadataBindAddress)) return false;
     if (!video.start(settings.videoPort, settings.tracePath, settings.latencyMs,
                      settings.packetTracePath, settings.codec, settings.videoBindAddress)) return false;
@@ -65,6 +77,7 @@ void ApplicationController::stop()
     control.stop();
     emit inputResetRequested();
     stopReception();
+    performance.stop();
 }
 
 void ApplicationController::stopReception()
@@ -77,12 +90,15 @@ void ApplicationController::stopReception()
 void ApplicationController::resetStream()
 {
     synchronizer.clear();
+    video.resetMeasurementTimes();
+    performance.resetFrames();
     emit streamReset();
 }
 
 void ApplicationController::recordPaint(quint64 deliveryId, qint64 monotonicNs)
 {
     video.recordPaint(deliveryId, monotonicNs);
+    performance.observePaint(deliveryId, monotonicNs);
 }
 
 void ApplicationController::fail(const QString &message)

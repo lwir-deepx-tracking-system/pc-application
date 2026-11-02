@@ -263,7 +263,29 @@ Packet 기록은 `build/receiver-packets.csv`, `build/sender-packets.csv`에 저
 
 Preview는 레이아웃 확인용이며 영상 수신과 TCP 연결을 시작하지 않는다. 제어 시험은 위의 Mock 서버·일반 GUI 실행 절차를 사용한다. VS Code 디버거로 Preview를 실행하려면 `.vscode/launch.json`의 `Debug pc-application` 구성에 `"args": ["--gui-preview"]`를 추가한 뒤 F5를 누른다. 일반 실행으로 돌아갈 때는 해당 인수를 제거한다.
 
-## 계측 CSV 사용
+## 성능 체크 기록
+
+`config/pc-application.yaml`에서 기록을 켜고 앱을 재시작한다.
+
+```yaml
+performance:
+  enabled: true
+  output_dir: logs
+```
+
+상대 저장 경로는 선택한 YAML 파일의 폴더 기준이다. 위 설정이면 `config/logs/20261102_153000.csv`처럼 파일 하나를 만든다. 날짜·시간이 겹치면 번호를 붙이며, 시험별 하위 폴더나 별도 요약 파일은 만들지 않는다. 첫 줄에는 코덱·시작 시각·적용한 수신/TCP 설정을 한 번 기록한다. 둘째 줄은 열 이름이고, 아래는 약 1초 구간별 데이터다. 앱을 정상 종료하면 마지막 부분 구간도 저장한다.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/Measure-Performance.ps1 -Path config/logs/20261102_153000.csv
+```
+
+분석 결과는 표시 FPS, 수신 RTP Mbps, 지연 최소·평균·최대, TCP 연결 상실·재접속 시도·ACK timeout 횟수다. 전체 평균 지연은 유효 표본 수로, 전체 FPS/Mbps는 실제 관측 시간으로 가중한다. 표본이 없는 지연은 CSV 빈칸으로 기록한다.
+
+UI는 실제 그린 영상의 FPS와 현재 구간 평균 PC 수신→그리기 지연만 표시한다. 같은 영상 재그리기는 새 프레임으로 세지 않는다. 지연은 PC 첫 RTP 관측부터 GUI paint 관측까지이며 보드 인코딩·PC 도착 전 네트워크 구간·물리 모니터 출력 시간은 제외한다. TCP PING 응답시간도 보드·PC 처리를 포함하므로 영상 편도 네트워크 지연으로 해석하지 않는다. 수신 Mbps는 RTP 버퍼 바이트 기준이다.
+
+`enabled: false`일 때도 UI 지표는 동작한다. 저장에 실패하면 화면 아래에 `Recording incomplete`를 표시하고 영상·TCP 동작은 계속한다. 이 시험 CSV와 아래 개발용 프레임/패킷 trace는 서로 다른 형식이다.
+
+## 개발용 계측 CSV 사용
 
 Trace 옵션을 생략하면 기록하지 않는다. `--video-trace` / `--trace`는 Frame 요약을 켜며 Packet 상세는 별도 옵션으로 필요한 시험에서만 켠다. 두 출력에는 서로 다른 파일 경로를 사용한다.
 

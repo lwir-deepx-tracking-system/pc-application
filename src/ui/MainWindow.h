@@ -24,10 +24,9 @@ public:
     void showControlError(const QString &message);
     void setDisplayFrame(const QImage &image, const QVector<TrackBox> &tracks, quint64 frameId = 0);
     void setVideoFps(double fps);
-    void setVideoProcessingTime(double milliseconds);
+    void setVideoLatency(double milliseconds);
+    void showRecordingError(const QString &message);
     void setVideoCodec(VideoCodec codec);
-    void setMetadataFps(double fps);
-    void setTrackCounts(quint32 wireCount, qsizetype displayedCount, bool metadataAvailable);
     void setClassLabels(const ClassLabels &labels);
 
 signals:
@@ -50,9 +49,7 @@ private:
     Control::BoardState board;
     bool controlReady = false, stateAvailable = false;
     QLabel *videoFpsLabel;
-    QLabel *videoProcessingLabel;
+    QLabel *videoLatencyLabel;
     QLabel *videoCodecLabel;
-    QLabel *metadataFpsLabel;
-    QLabel *trackCountLabel;
     QSet<quint32> availableTrackIds;
 };

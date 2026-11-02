@@ -22,6 +22,7 @@ public:
                const QString &bindAddress = "0.0.0.0");
     void stop();
     void recordPaint(quint64 frameId, qint64 monotonicNs);
+    void resetMeasurementTimes();
 
 signals:
     void frameReady(const QImage &image, quint64 ptsNs, qint64 rtpTimestamp, quint64 frameId);
@@ -30,6 +31,8 @@ signals:
     void processingTimeChanged(double milliseconds);
     void streamRestarted();
     void errorOccurred(const QString &message);
+    void frameObserved(quint64 deliveryId, qint64 firstRtpNs);
+    void rtpBytesReceived(quint64 bytes);
 
 private:
     static GstPadProbeReturn inspectRtp(GstPad *pad, GstPadProbeInfo *info, gpointer data);
@@ -48,6 +51,8 @@ private:
     quint64 deliveryId = 0; // Never reset across receiver restarts.
     VideoTrace trace;
     QMutex timestampMutex;
-    struct FrameTiming { quint32 ssrc; quint32 rtp; qint64 receivedNs; };
+    struct FrameTiming { quint32 ssrc; quint32 rtp; qint64 receivedNs; qint64 firstRtpNs; };
     std::map<quint64, FrameTiming> timestamps;
+    std::map<std::pair<quint32, quint32>, qint64> firstPackets;
+    quint64 incomingBytes = 0;
 };

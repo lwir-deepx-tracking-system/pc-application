@@ -27,6 +27,10 @@ signals:
     void commandFinished(const Control::Ack &ack);
     void resetRequested(); // A fresh connection or board INIT, not a mode inference.
     void errorOccurred(const QString &message);
+    void pingResponseMeasured(double milliseconds);
+    void connectionLost();
+    void reconnectAttempted();
+    void ackTimedOut();
 
 private:
     void connectNow();
@@ -44,4 +48,6 @@ private:
     QMap<int, qint64> pending;
     QByteArray received;
     bool active = false;
+    bool attempted = false;
+    qint64 pingSentNs = -1;
 };

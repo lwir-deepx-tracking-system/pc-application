@@ -37,7 +37,8 @@ if(NOT yaml-cpp_FOUND)
     endblock()
 endif()
 
-add_library(app-config STATIC src/config/AppConfig.cpp src/config/AppConfig.h src/config/ReceiverSettings.h src/video/VideoCodec.h)
+add_library(app-config STATIC src/config/AppConfig.cpp src/config/AppConfig.h src/config/ReceiverSettings.h
+    src/config/PerformanceSettings.h src/video/VideoCodec.h)
 target_include_directories(app-config PUBLIC src)
 target_link_libraries(app-config PUBLIC Qt6::Core PRIVATE Qt6::Network yaml-cpp::yaml-cpp)
 
@@ -73,9 +74,14 @@ qt_add_library(metadata-receiver STATIC
 target_include_directories(metadata-receiver PUBLIC src)
 target_link_libraries(metadata-receiver PUBLIC Qt6::Gui Qt6::Network)
 
+qt_add_library(performance-recorder STATIC
+    src/diagnostics/PerformanceRecorder.cpp src/diagnostics/PerformanceRecorder.h src/config/PerformanceSettings.h)
+target_include_directories(performance-recorder PUBLIC src)
+target_link_libraries(performance-recorder PUBLIC Qt6::Core)
+
 qt_add_library(application-controller STATIC src/app/ApplicationController.cpp src/app/ApplicationController.h)
 target_include_directories(application-controller PUBLIC src)
-target_link_libraries(application-controller PUBLIC video-receiver metadata-receiver control-client)
+target_link_libraries(application-controller PUBLIC video-receiver metadata-receiver control-client performance-recorder)
 
 function(deploy_qt_runtime target)
     if(WIN32)
@@ -156,6 +162,11 @@ deploy_qt_runtime(mock-control-server)
 if(BUILD_TESTING)
     enable_testing()
     find_package(Qt6 REQUIRED COMPONENTS Test)
+    qt_add_executable(performance-test tests/diagnostics/PerformanceTest.cpp)
+    set_target_properties(performance-test PROPERTIES WIN32_EXECUTABLE FALSE)
+    target_link_libraries(performance-test PRIVATE performance-recorder app-config video-receiver Qt6::Test)
+    deploy_runtime(performance-test)
+    add_test(NAME performance COMMAND performance-test -o -,txt)
     qt_add_executable(video-integration-test tests/integration/VideoReceiverTest.cpp)
     set_target_properties(video-integration-test PROPERTIES WIN32_EXECUTABLE FALSE)
     target_link_libraries(video-integration-test PRIVATE application-controller application-ui app-config Qt6::Widgets Qt6::Test)

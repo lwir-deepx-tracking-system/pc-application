@@ -109,23 +109,16 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     panelLayout->addWidget(targetGroup);
 
     panelLayout->addStretch();
-    auto *diagnosticGroup = new QGroupBox("DIAGNOSTICS");
+    auto *diagnosticGroup = new QGroupBox("VIDEO");
     auto *diagnosticLayout = new QVBoxLayout(diagnosticGroup);
     diagnosticLayout->setSpacing(8);
     videoCodecLabel = addValueRow(diagnosticLayout, "Video codec", "--");
     videoCodecLabel->setObjectName("videoCodec");
-    videoFpsLabel = addValueRow(diagnosticLayout, "Video FPS", "--");
+    videoFpsLabel = addValueRow(diagnosticLayout, "Display FPS", "--");
     videoFpsLabel->setObjectName("videoFps");
-    videoProcessingLabel = addValueRow(diagnosticLayout, "Decode + delivery", "--");
-    videoProcessingLabel->setObjectName("videoProcessingMs");
-    videoProcessingLabel->setToolTip("Average ms: complete RTP frame after jitter buffer to owned image; includes polling wait. Excludes network and paint.");
-    metadataFpsLabel = addValueRow(diagnosticLayout, "Metadata FPS", "--");
-    metadataFpsLabel->setObjectName("metadataFps");
-    for (const auto &name : {"Metadata Loss", "Video Missing", "Sync Miss"})
-        addValueRow(diagnosticLayout, name, "--")->setToolTip("Not implemented yet.");
-    trackCountLabel = addValueRow(diagnosticLayout, "Track Count", "--");
-    trackCountLabel->setObjectName("trackCount");
-    setTrackCounts(0, 0, false);
+    videoLatencyLabel = addValueRow(diagnosticLayout, "PC receive to paint", "--");
+    videoLatencyLabel->setObjectName("videoLatencyMs");
+    videoLatencyLabel->setToolTip("Current interval average ms: first RTP observed on this PC to GUI paint. Excludes board encoding and network transit to this PC; not physical monitor output.");
     panelLayout->addWidget(diagnosticGroup);
 
     connect(trackCombo, &QComboBox::editTextChanged, this, [this] {
@@ -147,27 +140,14 @@ void MainWindow::setVideoFps(double fps)
     videoFpsLabel->setText(QString::number(fps, 'f', 1));
 }
 
-void MainWindow::setVideoProcessingTime(double milliseconds)
+void MainWindow::setVideoLatency(double milliseconds)
 {
-    videoProcessingLabel->setText(QString::number(milliseconds, 'f', 2) + " ms");
+    videoLatencyLabel->setText(milliseconds >= 0 ? QString::number(milliseconds, 'f', 2) + " ms" : "--");
 }
 
 void MainWindow::setVideoCodec(VideoCodec codec)
 {
     videoCodecLabel->setText(codec == VideoCodec::JPEG ? "JPEG" : "H.264");
-}
-
-void MainWindow::setMetadataFps(double fps)
-{
-    metadataFpsLabel->setText(QString::number(fps, 'f', 1));
-}
-
-void MainWindow::setTrackCounts(quint32 wireCount, qsizetype displayedCount, bool metadataAvailable)
-{
-    trackCountLabel->setText(metadataAvailable ? QString::number(wireCount) : "--");
-    trackCountLabel->setToolTip(metadataAvailable
-        ? QString("Wire records: %1\nDisplayed boxes: %2").arg(wireCount).arg(displayedCount)
-        : QString("No metadata for the current frame."));
 }
 
 void MainWindow::setClassLabels(const ClassLabels &labels)
@@ -224,10 +204,8 @@ void MainWindow::requestManual()
 void MainWindow::resetReception()
 {
     setDisplayFrame({}, {});
-    setTrackCounts(0, 0, false);
     videoFpsLabel->setText("--");
-    metadataFpsLabel->setText("--");
-    videoProcessingLabel->setText("--");
+    videoLatencyLabel->setText("--");
 }
 
 QWidget *MainWindow::manualInputSurface() const { return videoWidget; }
@@ -289,3 +267,15 @@ void MainWindow::showCommandResult(const Control::Ack &ack)
 }
 
 void MainWindow::showControlError(const QString &message) { statusBar()->showMessage(message, 5000); }
+
+void MainWindow::showRecordingError(const QString &message)
+{
+    auto *label = statusBar()->findChild<QLabel *>("recordingError");
+    if (!label) {
+        label = new QLabel(statusBar());
+        label->setObjectName("recordingError");
+        statusBar()->addPermanentWidget(label);
+    }
+    label->setText("Recording incomplete");
+    label->setToolTip(message);
+}

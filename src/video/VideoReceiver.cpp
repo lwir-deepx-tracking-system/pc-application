@@ -2,6 +2,8 @@
 #include "GStreamerRuntime.h"
 #include "VideoPipeline.h"
 #include <QHostAddress>
+#include <algorithm>
+#include <utility>
 
 #include <gst/app/gstappsink.h>
 #include <gst/rtp/gstrtpbuffer.h>
@@ -98,11 +100,23 @@ void VideoReceiver::stop()
     bus = nullptr;
     sink = nullptr;
     pipeline = nullptr;
+    quint64 bytes;
     {
         QMutexLocker lock(&timestampMutex);
         timestamps.clear();
+        firstPackets.clear();
+        bytes = std::exchange(incomingBytes, 0);
     }
+    if (bytes) emit rtpBytesReceived(bytes);
     trace.close();
+}
+
+void VideoReceiver::resetMeasurementTimes()
+{
+    QMutexLocker lock(&timestampMutex);
+    // In-flight frames remain invalid until their marker; don't time a partial frame after reset.
+    for (auto &[key, firstNs] : firstPackets) firstNs = -1;
+    for (auto &[pts, timing] : timestamps) timing.firstRtpNs = -1;
 }
 
 GstPadProbeReturn VideoReceiver::inspectRtp(GstPad *, GstPadProbeInfo *info, gpointer data)
@@ -118,7 +132,10 @@ GstPadProbeReturn VideoReceiver::inspectRtp(GstPad *, GstPadProbeInfo *info, gpo
             self->trace.record("receiver_rtp", 0, pts, timestamp, gst_rtp_buffer_get_seq(&rtp), ssrc);
             if (GST_CLOCK_TIME_IS_VALID(pts)) {
                 QMutexLocker lock(&self->timestampMutex);
-                self->timestamps[pts] = {ssrc, timestamp, VideoTrace::nowNs()};
+                const auto first = self->firstPackets.find({ssrc, timestamp});
+                self->timestamps[pts] = {ssrc, timestamp, VideoTrace::nowNs(),
+                    first == self->firstPackets.end() ? -1 : first->second};
+                if (first != self->firstPackets.end()) self->firstPackets.erase(first);
                 while (self->timestamps.size() > 256)
                     self->timestamps.erase(self->timestamps.begin());
             }
@@ -131,11 +148,21 @@ GstPadProbeReturn VideoReceiver::inspectRtp(GstPad *, GstPadProbeInfo *info, gpo
 GstPadProbeReturn VideoReceiver::inspectIncomingRtp(GstPad *, GstPadProbeInfo *info, gpointer data)
 {
     auto *self = static_cast<VideoReceiver *>(data);
-    if (!self->trace.active()) return GST_PAD_PROBE_OK;
     const auto observe = [self](GstBuffer *buffer) {
         const qint64 observedNs = VideoTrace::nowNs();
         GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
         if (buffer && gst_rtp_buffer_map(buffer, GST_MAP_READ, &rtp)) {
+            {
+                QMutexLocker lock(&self->timestampMutex);
+                self->incomingBytes += gst_buffer_get_size(buffer);
+                self->firstPackets.emplace(std::make_pair(gst_rtp_buffer_get_ssrc(&rtp),
+                    gst_rtp_buffer_get_timestamp(&rtp)), observedNs);
+                if (self->firstPackets.size() > 256) {
+                    const auto oldest = std::min_element(self->firstPackets.begin(), self->firstPackets.end(),
+                        [](const auto &a, const auto &b) { return a.second < b.second; });
+                    self->firstPackets.erase(oldest);
+                }
+            }
             self->trace.record("receiver_packet", 0, GST_BUFFER_PTS(buffer),
                 gst_rtp_buffer_get_timestamp(&rtp), gst_rtp_buffer_get_seq(&rtp),
                 gst_rtp_buffer_get_ssrc(&rtp), gst_rtp_buffer_get_marker(&rtp), observedNs);
@@ -160,6 +187,12 @@ void VideoReceiver::recordPaint(quint64 frameId, qint64 monotonicNs)
 void VideoReceiver::poll()
 {
     trace.drain();
+    quint64 bytes;
+    {
+        QMutexLocker lock(&timestampMutex);
+        bytes = std::exchange(incomingBytes, 0);
+    }
+    if (bytes) emit rtpBytesReceived(bytes);
     while (GstMessage *message = gst_bus_pop_filtered(bus,
             GstMessageType(GST_MESSAGE_ERROR | GST_MESSAGE_EOS))) {
         QString text = "Video stream ended";
@@ -193,12 +226,14 @@ void VideoReceiver::poll()
             const quint64 pts = GST_BUFFER_PTS(buffer);
             qint64 rtpTimestamp = -1;
             qint64 ssrc = -1;
+            qint64 firstRtpNs = -1;
             {
                 QMutexLocker lock(&timestampMutex);
                 const auto found = timestamps.find(pts);
                 if (found != timestamps.end()) {
                     ssrc = found->second.ssrc;
                     rtpTimestamp = found->second.rtp;
+                    firstRtpNs = found->second.firstRtpNs;
                     processingNs += VideoTrace::nowNs() - found->second.receivedNs;
                     ++processingFrames;
                     timestamps.erase(timestamps.begin(), std::next(found));
@@ -212,6 +247,7 @@ void VideoReceiver::poll()
             trace.record("appsink", frameId, pts, rtpTimestamp, -1, ssrc, false, acquiredNs);
             gst_video_frame_unmap(&frame);
             ++fpsFrames;
+            emit frameObserved(frameId, firstRtpNs);
             emit frameReady(ownedImage, pts, rtpTimestamp, frameId);
         }
         gst_sample_unref(sample);

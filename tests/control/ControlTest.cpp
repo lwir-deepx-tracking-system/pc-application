@@ -48,6 +48,44 @@ class ControlTest : public QObject
 {
     Q_OBJECT
 private slots:
+    void controllerRecordsControlHealth()
+    {
+        MockControlServer board;
+        QVERIFY(board.listen(QHostAddress::LocalHost, 0));
+        auto control = settingsFor(board.port());
+        control.pingIntervalMs = 40;
+        control.ackTimeoutMs = 250;
+        ApplicationController controller;
+        ReceiverSettings receiver;
+        receiver.videoPort = 15110;
+        receiver.metadataPort = 15111;
+        QSignalSpy samples(&controller, &ApplicationController::performanceSampleReady);
+        QSignalSpy errors(&controller, &ApplicationController::controlError);
+        QVERIFY(controller.start(receiver, {}, control));
+        controller.startControl(control);
+        QTRY_VERIFY_WITH_TIMEOUT(!samples.isEmpty(), 2000);
+        QVERIFY(qvariant_cast<PerformanceSample>(samples.first().first()).pingRtt.samples > 0);
+        board.setPingReplies(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!errors.isEmpty(), 2000);
+        QTest::qWait(150); // Allow the configured automatic reconnect attempt.
+        controller.stop();
+        quint64 pings = 0, lost = 0, retried = 0, timedOut = 0;
+        for (const auto &arguments : samples) {
+            const auto sample = qvariant_cast<PerformanceSample>(arguments.first());
+            pings += sample.pingRtt.samples;
+            lost += sample.disconnects;
+            retried += sample.reconnectAttempts;
+            timedOut += sample.ackTimeouts;
+        }
+        QVERIFY(pings > 0);
+        QCOMPARE(lost, quint64(1));
+        QVERIFY(retried >= 1);
+        QCOMPARE(timedOut, quint64(1));
+        const auto count = samples.count();
+        controller.stop();
+        QCOMPARE(samples.count(), count);
+    }
+
     void wireFixtures()
     {
         using namespace Control;

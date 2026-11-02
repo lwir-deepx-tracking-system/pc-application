@@ -20,7 +20,7 @@ ControlClient::ControlClient(QObject *parent) : QObject(parent)
     connect(&deadlineTimer, &QTimer::timeout, this, [this] {
         const auto now = clock.elapsed();
         for (auto deadline : pending) {
-            if (now >= deadline) { retry("Control ACK timeout"); return; }
+            if (now >= deadline) { emit ackTimedOut(); retry("Control ACK timeout"); return; }
         }
     });
     connect(&socket, &QTcpSocket::connected, this, [this] {
@@ -57,6 +57,7 @@ void ControlClient::clearConnection()
     pingTimer.stop();
     deadlineTimer.stop();
     pending.clear();
+    pingSentNs = -1;
     received.clear();
     state = {};
     setConnection(Control::Connection::Disconnected);
@@ -74,6 +75,7 @@ void ControlClient::start(const ControlSettings &config)
         return;
     }
     active = true;
+    attempted = false;
     connectNow();
 }
 
@@ -87,6 +89,8 @@ void ControlClient::stop()
 void ControlClient::connectNow()
 {
     if (!active) return;
+    if (attempted) emit reconnectAttempted();
+    attempted = true;
     setConnection(Control::Connection::Connecting);
     connectionTimer.start(settings.connectTimeoutMs);
     socket.connectToHost(settings.host, settings.port);
@@ -94,6 +98,8 @@ void ControlClient::connectNow()
 
 void ControlClient::retry(const QString &message)
 {
+    if (connection == Control::Connection::Ready || connection == Control::Connection::AwaitingState)
+        emit connectionLost();
     clearConnection();
     emit errorOccurred(message);
     if (active) reconnectTimer.start(settings.reconnectIntervalMs);
@@ -112,12 +118,15 @@ bool ControlClient::send(const Control::Message &message)
     if (Control::needsAck(message.category, message.command) && pending.contains(id)) return false;
     const auto bytes = Control::encode(message);
     if (bytes.isEmpty()) return false;
+    const bool ping = message.category == Control::Category::System && message.command == quint8(Control::System::Ping);
+    const qint64 sentNs = ping ? clock.nsecsElapsed() : -1;
     // No deferred command queue. Fail the connection instead of accumulating stale input.
     if (socket.bytesToWrite() > 65536 || socket.write(bytes) != bytes.size()) {
         retry("Control send failed or backlog exceeded");
         return false;
     }
     if (Control::needsAck(message.category, message.command)) pending.insert(id, clock.elapsed() + settings.ackTimeoutMs);
+    if (ping) pingSentNs = sentNs;
     return true;
 }
 
@@ -171,12 +180,18 @@ void ControlClient::receive()
             Control::Ack ack;
             if (!Control::decodeAck(message.payload, ack)) { retry("Invalid ACK payload"); return; }
             if (!pending.remove(key(ack.category, ack.command))) continue; // Unsolicited/obsolete ACK.
+            if (ack.category == Control::Category::System && ack.command == quint8(Control::System::Ping)) {
+                if (pingSentNs >= 0 && ack.result == Control::Result::Ok)
+                    emit pingResponseMeasured(double(clock.nsecsElapsed() - pingSentNs) / 1e6);
+                pingSentNs = -1;
+            }
             emit commandFinished(ack);
         } else if (message.command == quint8(Control::System::Init) || message.command == quint8(Control::System::Status)) {
             Control::BoardState next;
             if (!Control::decodeState(message.payload, next)) { retry("Invalid board state"); return; }
             if (message.command == quint8(Control::System::Init)) {
                 pending.clear();
+                pingSentNs = -1;
                 emit resetRequested();
             }
             state = next;

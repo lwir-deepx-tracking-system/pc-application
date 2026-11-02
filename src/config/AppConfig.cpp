@@ -1,6 +1,8 @@
 #include "AppConfig.h"
 
 #include <QFile>
+#include <QFileInfo>
+#include <QDir>
 #include <QHostAddress>
 #include <stdexcept>
 #include <yaml-cpp/yaml.h>
@@ -21,7 +23,7 @@ AppConfig loadAppConfig(const QString &path)
         else if (codec == "h264") config.receiver.codec = VideoCodec::H264;
         else throw std::runtime_error("video.codec must be jpeg or h264");
         const auto number = [](const YAML::Node &section, const char *key, int fallback, int min, int max) {
-            const int value = section[key].as<int>(fallback);
+            const int value = section[key] ? section[key].as<int>() : fallback;
             if (value < min || value > max) throw std::runtime_error(std::string("Invalid receiver setting: ") + key);
             return value;
         };
@@ -65,6 +67,16 @@ AppConfig loadAppConfig(const QString &path)
             settings.connectTimeoutMs = interval("connect_timeout_ms", 2000);
             settings.reconnectIntervalMs = interval("reconnect_interval_ms", 1000);
         }
+        const auto performance = root["performance"];
+        QString outputDir = "logs";
+        if (performance) {
+            if (!performance.IsMap()) throw std::runtime_error("performance must be a map");
+            config.performance.enabled = performance["enabled"] ? performance["enabled"].as<bool>() : false;
+            if (performance["output_dir"])
+                outputDir = QString::fromStdString(performance["output_dir"].as<std::string>()).trimmed();
+            if (outputDir.isEmpty()) throw std::runtime_error("performance.output_dir must not be empty");
+        }
+        config.performance.outputDir = QDir::cleanPath(QFileInfo(path).absoluteDir().absoluteFilePath(outputDir));
         return config;
     } catch (const YAML::Exception &error) {
         throw std::runtime_error(std::string("Invalid YAML: ") + error.what());

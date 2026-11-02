@@ -5,6 +5,7 @@
 #include "video/VideoReceiver.h"
 #include "control/ControlClient.h"
 #include "config/ReceiverSettings.h"
+#include "diagnostics/PerformanceRecorder.h"
 
 // Coordinates reception and user requests; the board owns operating state.
 class ApplicationController : public QObject
@@ -13,7 +14,8 @@ class ApplicationController : public QObject
 public:
     explicit ApplicationController(QObject *parent = nullptr);
     ~ApplicationController() override;
-    bool start(const ReceiverSettings &settings);
+    bool start(const ReceiverSettings &settings, const PerformanceSettings &performance = {},
+               const ControlSettings &controlSettings = {});
     void stop();
     void resetStream();
     void recordPaint(quint64 deliveryId, qint64 monotonicNs);
@@ -28,7 +30,9 @@ signals:
     void trackCountsChanged(quint32 wireCount, qsizetype displayedCount, bool metadataAvailable);
     void videoFpsChanged(double fps);
     void metadataFpsChanged(double fps);
-    void processingTimeChanged(double milliseconds);
+    void videoLatencyChanged(double milliseconds);
+    void performanceSampleReady(const PerformanceSample &sample);
+    void performanceError(const QString &message);
     void streamReset();
     void errorOccurred(const QString &message);
     void controlConnectionChanged(Control::Connection connection);
@@ -46,4 +50,5 @@ private:
     VideoReceiver video;
     MetadataReceiver metadata;
     FrameSynchronizer synchronizer;
+    PerformanceRecorder performance;
 };

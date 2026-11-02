@@ -42,7 +42,8 @@ private slots:
         const auto metadataPort = overridePorts ? "15105" : "15005";
         configFile.write("video:\n  codec: " + codecName.toUtf8()
             + "\n  bind_address: 127.0.0.1\n  port: " + videoPort
-            + "\n  latency_ms: 20\nmetadata:\n  bind_address: 127.0.0.1\n  port: " + metadataPort + "\n");
+            + "\n  latency_ms: 20\nmetadata:\n  bind_address: 127.0.0.1\n  port: " + metadataPort
+            + "\nperformance:\n  enabled: true\n  output_dir: results\n");
         configFile.close();
         const auto outputDir = QCoreApplication::applicationDirPath();
         const auto tracePath = directory.filePath("receiver.csv");
@@ -74,6 +75,34 @@ private slots:
             if (fields.size() == 17 && fields[14] == "1") ++displayed;
         }
         QVERIFY2(displayed > 20, "Configured GUI did not receive/display the selected codec");
+        const QDir results(directory.filePath("results"));
+        const auto files = results.entryList({"*.csv"}, QDir::Files);
+        QCOMPARE(files.size(), 1);
+        QVERIFY(!files.first().contains(codecName));
+        QFile performanceFile(results.filePath(files.first()));
+        QVERIFY(performanceFile.open(QIODevice::ReadOnly));
+        const auto lines = performanceFile.readAll().trimmed().split('\n');
+        QVERIFY(lines.first().startsWith("# codec=" + codecName.toUtf8() + ";"));
+        QVERIFY(lines.first().contains("video_port=15004;")); // Includes explicit CLI override.
+        QVERIFY(lines[1].startsWith("elapsed_s,interval_s,"));
+        QVERIFY(!lines[1].contains("codec"));
+        quint64 painted = 0, measured = 0;
+        double bytes = 0;
+        for (qsizetype i = 2; i < lines.size(); ++i) {
+            const auto fields = lines[i].split(',');
+            QCOMPARE(fields.size(), 16);
+            painted += fields[2].toULongLong();
+            bytes += fields[4].toDouble() * fields[1].toDouble();
+            measured += fields[5].toULongLong();
+            if (fields[5].toULongLong()) QVERIFY(fields[7].toDouble() > 0);
+        }
+        QVERIFY(painted > 20);
+        QVERIFY(measured > 20);
+        QVERIFY(bytes > 0);
+        performanceFile.close();
+        const auto sampleCopy = outputDir + "/performance-" + codecName + (overridePorts ? "-override" : "-yaml") + ".csv";
+        QFile::remove(sampleCopy);
+        QVERIFY(performanceFile.copy(sampleCopy));
     }
 
     void yamlCodecConfig()
@@ -102,6 +131,12 @@ private slots:
         QCOMPARE(window.findChild<QLabel *>("videoCodec")->text(), QString("H.264"));
         window.setVideoCodec(VideoCodec::JPEG);
         QCOMPARE(window.findChild<QLabel *>("videoCodec")->text(), QString("JPEG"));
+        QVERIFY(!window.findChild<QLabel *>("metadataFps"));
+        QVERIFY(!window.findChild<QLabel *>("trackCount"));
+        window.setVideoLatency(12.5);
+        QCOMPARE(window.findChild<QLabel *>("videoLatencyMs")->text(), QString("12.50 ms"));
+        window.setVideoLatency(-1);
+        QCOMPARE(window.findChild<QLabel *>("videoLatencyMs")->text(), QString("--"));
     }
 
     void yamlNetworkSettings()
@@ -145,6 +180,7 @@ private slots:
         QTest::newRow("metadata-type") << QByteArray("video:\n  codec: jpeg\nmetadata: []\n");
         QTest::newRow("bad-metadata-address") << QByteArray("video:\n  codec: jpeg\nmetadata:\n  bind_address: ''\n");
         QTest::newRow("bad-metadata-port") << QByteArray("video:\n  codec: jpeg\nmetadata:\n  port: -1\n");
+        QTest::newRow("port-typo") << QByteArray("video:\n  codec: jpeg\nmetadata:\n  port: 5001`\n");
         QTest::newRow("duplicate-udp-port") << QByteArray("video:\n  codec: jpeg\n  port: 5001\n");
     }
 
@@ -390,34 +426,35 @@ private slots:
         FrameSynchronizer sync;
         MainWindow window;
         connect(&sync, &FrameSynchronizer::frameReady, &window, &MainWindow::setDisplayFrame);
-        connect(&sync, &FrameSynchronizer::trackCountsChanged, &window, &MainWindow::setTrackCounts);
-        auto *count = window.findChild<QLabel *>("trackCount");
+        QSignalSpy counts(&sync, &FrameSynchronizer::trackCountsChanged);
         auto *tracks = window.findChild<QComboBox *>("trackCombo");
         QImage image(640, 480, QImage::Format_RGB888);
         image.fill(Qt::gray);
         sync.submitVideo(image, 9000, 1);
-        QCOMPARE(count->text(), QString("--"));
+        QCOMPARE(counts.last()[2].toBool(), false);
         sync.submitMetadata(metadata);
-        QCOMPARE(count->text(), QString("3"));
-        QCOMPARE(count->toolTip(), QString("Wire records: 3\nDisplayed boxes: 1"));
+        QCOMPARE(counts.last()[0].toUInt(), quint32(3));
+        QCOMPARE(counts.last()[1].toLongLong(), qlonglong(1));
+        QCOMPARE(counts.last()[2].toBool(), true);
         QCOMPARE(tracks->count(), 1);
         for (auto *label : window.findChildren<QLabel *>())
             QVERIFY(label->text() != "Detection");
 
         sync.submitVideo(image, 12000, 2);
-        QCOMPARE(count->text(), QString("--"));
+        QCOMPARE(counts.last()[2].toBool(), false);
         QCOMPARE(tracks->count(), 0);
         const auto empty = QByteArray::fromHex("4c574952000000000000002b00002ee0000000000001e24000000000");
         QVERIFY(decodeTrackingMetadata(empty, metadata));
         sync.submitMetadata(metadata);
-        QCOMPARE(count->text(), QString("0"));
-        QCOMPARE(count->toolTip(), QString("Wire records: 0\nDisplayed boxes: 0"));
+        QCOMPARE(counts.last()[0].toUInt(), quint32(0));
+        QCOMPARE(counts.last()[1].toLongLong(), qlonglong(0));
+        QCOMPARE(counts.last()[2].toBool(), true);
         // A zero-track packet must expire to unknown, rather than remain a permanent zero.
-        QTRY_COMPARE_WITH_TIMEOUT(count->text(), QString("--"), 1000);
+        QTRY_COMPARE_WITH_TIMEOUT(counts.last()[2].toBool(), false, 1000);
         sync.submitMetadata(metadata);
-        QCOMPARE(count->text(), QString("0"));
+        QCOMPARE(counts.last()[2].toBool(), true);
         sync.clear();
-        QCOMPARE(count->text(), QString("--"));
+        QCOMPARE(counts.last()[2].toBool(), false);
     }
 
     void resizeBoundingBoxes_data()
@@ -566,7 +603,7 @@ private slots:
         QCOMPARE(selected[0][0].toUInt(), quint32(0xffffffff));
         window.resetReception();
         QCOMPARE(combo->count(), 0);
-        QCOMPARE(window.findChild<QLabel *>("trackCount")->text(), QString("--"));
+        QVERIFY(!window.findChild<QLabel *>("trackCount"));
     }
 
     void controllerStartupRecovery()
@@ -608,9 +645,11 @@ private slots:
         settings.codec = codecName == "jpeg" ? VideoCodec::JPEG : VideoCodec::H264;
         ApplicationController controller;
         MainWindow window;
+        window.setVideoCodec(settings.codec);
         connect(&controller, &ApplicationController::frameReady, &window, &MainWindow::setDisplayFrame);
-        connect(&controller, &ApplicationController::trackCountsChanged, &window, &MainWindow::setTrackCounts);
         connect(&controller, &ApplicationController::streamReset, &window, &MainWindow::resetReception);
+        connect(&controller, &ApplicationController::videoFpsChanged, &window, &MainWindow::setVideoFps);
+        connect(&controller, &ApplicationController::videoLatencyChanged, &window, &MainWindow::setVideoLatency);
         connect(&window, &MainWindow::framePainted, &controller, &ApplicationController::recordPaint);
         window.show();
         QSignalSpy errors(&controller, &ApplicationController::errorOccurred);
@@ -619,18 +658,19 @@ private slots:
             QTemporaryDir directory;
             settings.tracePath = directory.filePath("frames.csv");
             QVERIFY(controller.start(settings));
-            auto *count = window.findChild<QLabel *>("trackCount");
-            QCOMPARE(count->text(), QString("--"));
+            counts.clear();
             QProcess sender;
             sender.setProgram(QCoreApplication::applicationDirPath() + "/mock-video-sender");
             sender.setArguments({"--port", "15010", "--metadata-port", "15011", "--frames", "45", "--codec", codecName});
             sender.start();
             QVERIFY(sender.waitForStarted());
-            QTRY_COMPARE_WITH_TIMEOUT(count->text(), QString("1"), 5000);
+            QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QComboBox *>("trackCombo")->count() == 1, 5000);
+            QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QLabel *>("videoLatencyMs")->text() != "--", 2500);
+            QVERIFY(window.findChild<QLabel *>("videoFps")->text().toDouble() > 0);
+            window.grab().save(QCoreApplication::applicationDirPath() + "/performance-" + codecName + ".png");
             QTRY_VERIFY_WITH_TIMEOUT(sender.state() == QProcess::NotRunning, 5000);
             QCOMPARE(sender.exitCode(), 0);
             controller.stop();
-            QCOMPARE(count->text(), QString("--"));
             QCOMPARE(window.findChild<QComboBox *>("trackCombo")->count(), 0);
             QVERIFY(!counts.isEmpty());
             QCOMPARE(counts.last()[2].toBool(), false);
@@ -679,8 +719,7 @@ private slots:
                     if (tracks.size() != 1 || tracks[0].trackId != 7 || tracks[0].classId != 0 || tracks[0].bbox != expected) wrongBox = true;
                 }
             });
-        connect(&metadata, &MetadataReceiver::fpsChanged, &window, &MainWindow::setMetadataFps);
-        connect(&sync, &FrameSynchronizer::trackCountsChanged, &window, &MainWindow::setTrackCounts);
+        QSignalSpy metadataFps(&metadata, &MetadataReceiver::fpsChanged);
         QSignalSpy videoErrors(&video, &VideoReceiver::errorOccurred);
         QSignalSpy metadataErrors(&metadata, &MetadataReceiver::errorOccurred);
         QVERIFY(metadata.start(15003));
@@ -694,8 +733,8 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(matched > 30, 8000);
         QVERIFY2(!wrongBox, "Box xywh was matched to the wrong RTP frame");
         QCOMPARE(window.findChild<QComboBox *>("trackCombo")->count(), 1);
-        QCOMPARE(window.findChild<QLabel *>("trackCount")->text(), QString("1"));
-        QTRY_VERIFY(window.findChild<QLabel *>("metadataFps")->text() != "--");
+        QTRY_VERIFY(!metadataFps.isEmpty());
+        QVERIFY(metadataFps.last().first().toDouble() > 0);
         window.grab().save(outputDir + "/metadata-" + codecName + ".png");
         QTRY_VERIFY_WITH_TIMEOUT(sender.state() == QProcess::NotRunning, 6000);
         QCOMPARE(sender.exitCode(), 0);
@@ -846,7 +885,6 @@ private slots:
         connect(&receiver, &VideoReceiver::frameReady, &window,
             [&window](const QImage &image, quint64, qint64, quint64 id) { window.setDisplayFrame(image, {}, id); });
         connect(&receiver, &VideoReceiver::fpsChanged, &window, &MainWindow::setVideoFps);
-        connect(&receiver, &VideoReceiver::processingTimeChanged, &window, &MainWindow::setVideoProcessingTime);
         QSignalSpy frames(&receiver, &VideoReceiver::frameReady);
         QSignalSpy processing(&receiver, &VideoReceiver::processingTimeChanged);
         QSignalSpy errors(&receiver, &VideoReceiver::errorOccurred);
