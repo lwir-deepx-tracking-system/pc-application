@@ -1,8 +1,7 @@
 #include <QApplication>
 #include "ui/MainWindow.h"
-#include "video/VideoReceiver.h"
-#include "metadata/MetadataReceiver.h"
-#include "metadata/FrameSynchronizer.h"
+#include "app/ApplicationController.h"
+#include "app/GuiPreview.h"
 #include "config/AppConfig.h"
 #include <QCommandLineParser>
 #include <QDebug>
@@ -16,7 +15,7 @@ int main(int argc, char *argv[])
     QCommandLineParser parser;
     parser.setApplicationDescription("LWIR RTP/JPEG or H.264 video receiver");
     parser.addHelpOption();
-    parser.addOption({"gui-preview", "Show the Phase 1 dummy GUI without receiving video."});
+    parser.addOption({"gui-preview", "Show a synthetic preview without receiving video."});
     parser.addOption({"video-trace", "Write frame summary CSV.", "path"});
     parser.addOption({"video-packet-trace", "Optional pre-jitter RTP packet CSV.", "path"});
     parser.addOption({"video-port", "UDP video port.", "port", "5000"});
@@ -46,7 +45,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    MainWindow window(nullptr, parser.isSet("gui-preview"));
+    MainWindow window;
     ClassLabels classLabels;
     QString classError;
     const QString classPath = parser.isSet("class-names") ? parser.value("class-names")
@@ -57,35 +56,33 @@ int main(int argc, char *argv[])
     }
     window.setClassLabels(classLabels);
     window.setVideoCodec(config.videoCodec);
-    VideoReceiver receiver;
-    MetadataReceiver metadata;
-    FrameSynchronizer synchronizer;
-    QObject::connect(&receiver, &VideoReceiver::frameReady, &synchronizer,
-        [&synchronizer](const QImage &image, quint64, qint64 timestamp, quint64 frameId) {
-            synchronizer.submitVideo(image, timestamp, frameId);
-        });
-    QObject::connect(&metadata, &MetadataReceiver::frameReady, &synchronizer, &FrameSynchronizer::submitMetadata);
-    QObject::connect(&receiver, &VideoReceiver::streamRestarted, &synchronizer, &FrameSynchronizer::clear);
-    QObject::connect(&synchronizer, &FrameSynchronizer::frameReady, &window, &MainWindow::setDisplayFrame);
-    QObject::connect(&synchronizer, &FrameSynchronizer::trackCountsChanged, &window, &MainWindow::setTrackCounts);
-    QObject::connect(&metadata, &MetadataReceiver::fpsChanged, &window, &MainWindow::setMetadataFps);
-    QObject::connect(&metadata, &MetadataReceiver::errorOccurred, &window,
-        [](const QString &message) { qCritical().noquote() << "Metadata:" << message; });
-    QObject::connect(&window, &MainWindow::framePainted, &receiver, &VideoReceiver::recordPaint);
-    QObject::connect(&receiver, &VideoReceiver::fpsChanged, &window, &MainWindow::setVideoFps);
-    QObject::connect(&receiver, &VideoReceiver::processingTimeChanged, &window, &MainWindow::setVideoProcessingTime);
-    QObject::connect(&receiver, &VideoReceiver::errorOccurred, &window,
-        [&window, &synchronizer](const QString &message) {
-            qCritical().noquote() << "Video:" << message;
-            synchronizer.clear();
-            window.setDisplayFrame({}, {});
-        });
-    if (!parser.isSet("gui-preview")) {
-        synchronizer.clear();
-        if (!metadata.start(static_cast<quint16>(metadataPort))
-            || !receiver.start(static_cast<quint16>(port), parser.value("video-trace"), latency,
-                               parser.value("video-packet-trace"), config.videoCodec))
-            return 1;
+    ApplicationController controller;
+    QObject::connect(&controller, &ApplicationController::frameReady, &window, &MainWindow::setDisplayFrame);
+    QObject::connect(&controller, &ApplicationController::trackCountsChanged, &window, &MainWindow::setTrackCounts);
+    QObject::connect(&controller, &ApplicationController::videoFpsChanged, &window, &MainWindow::setVideoFps);
+    QObject::connect(&controller, &ApplicationController::metadataFpsChanged, &window, &MainWindow::setMetadataFps);
+    QObject::connect(&controller, &ApplicationController::processingTimeChanged, &window, &MainWindow::setVideoProcessingTime);
+    QObject::connect(&controller, &ApplicationController::streamReset, &window, &MainWindow::resetReception);
+    QObject::connect(&controller, &ApplicationController::errorOccurred, &window,
+        [](const QString &message) { qCritical().noquote() << message; });
+    QObject::connect(&window, &MainWindow::framePainted, &controller, &ApplicationController::recordPaint);
+    // User intent stays separate from board state; TCP control is not implemented yet.
+    QObject::connect(&window, &MainWindow::targetSetRequested, &controller,
+        [](quint32 id) { qInfo() << "TARGET_SET" << id << "[control unavailable]"; });
+    QObject::connect(&window, &MainWindow::targetClearRequested, &controller,
+        [] { qInfo() << "TARGET_CLEAR [control unavailable]"; });
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &controller, &ApplicationController::stop);
+    if (parser.isSet("gui-preview")) {
+        showGuiPreview(window);
+    } else {
+        ReceiverSettings settings;
+        settings.videoPort = static_cast<quint16>(port);
+        settings.metadataPort = static_cast<quint16>(metadataPort);
+        settings.codec = config.videoCodec;
+        settings.latencyMs = latency;
+        settings.tracePath = parser.value("video-trace");
+        settings.packetTracePath = parser.value("video-packet-trace");
+        if (!controller.start(settings)) return 1;
     }
     window.show();
 

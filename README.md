@@ -55,6 +55,14 @@ video:
 
 `--config`를 생략하면 현재 작업 폴더의 `config/pc-application.yaml`을 먼저 찾고, 없으면 실행 파일 옆 `config/pc-application.yaml`을 읽는다. 배포용 설정은 빌드 시 복사된다. 파일이 없거나 코덱 값이 잘못되면 실행을 중단한다. 기존 `--video-codec` 옵션과 코덱 선택 드롭다운은 제거했다.
 
+### 수신 구조
+
+`src/app/ApplicationController`는 영상·메타데이터 수신부와 `FrameSynchronizer`를 소유하고 시작·종료·초기화를 관리한다. 시작 실패 시 열린 소켓을 정리하며, 정지·오류·stream 변경 시 표시 상태를 초기화한다. `main.cpp`는 실행 설정과 UI 연결을 담당한다.
+
+`MainWindow` / `VideoWidget`은 표시와 사용자 입력을 처리한다. 타깃 선택·해제는 요청 signal이며 아직 보드로 전송하지 않는다. 향후 TCP client는 controller에서 연결하고, 실제 운용 상태는 보드의 INIT / STATUS로 갱신한다. 영상 수신 여부와 보드 제어 연결 상태는 별개다.
+
+JPEG / H.264 수신 파이프라인 생성은 `src/video/VideoPipeline`에 모았다. 프리뷰 영상은 `src/app/GuiPreview`에서 생성하며 `--gui-preview`로만 사용한다. 이번 구조 변경으로 wire 형식은 바뀌지 않는다.
+
 ### 추적 메타데이터와 BBox
 
 GUI는 기본 UDP **5001**에서 **LWIR** 메타데이터를 수신한다. 헤더는 28바이트(Magic 4, Frame ID 8, RTP timestamp 4, guiStartedUs 8, Track count 4), Track은 25바이트(ID 4, xywh float32 16, Class ID 1, Confidence float32 4)다. Version·메시지 종류·원본 크기·Detection count는 전송하지 않는다. 다중 바이트 필드는 Big Endian이며 원본 좌표계는 640×480 고정이다. Frame ID 0인 패킷은 전체 폐기한다. Track ID 0은 해당 Track만 제외하며, Class ID 255는 정상적인 Unknown이다.

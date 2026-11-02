@@ -31,4 +31,5 @@ private:
     QVector<TrackBox> tracks;
     ClassLabels classLabels;
     quint64 pendingFrameId = 0;
+    quint64 lastFrameId = 0;
 };

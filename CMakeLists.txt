@@ -21,8 +21,8 @@ if(NOT yaml-cpp_FOUND)
         GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
         GIT_TAG f7320141120f720aecc4c32be25586e7da9eb978)
     block()
-        # yaml-cpp 0.8 predates CMake 4's minimum compatibility policy.
-        set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+        # Use supported compatibility policies for yaml-cpp 0.8 on recent CMake.
+        set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
         FetchContent_MakeAvailable(yaml-cpp)
     endblock()
 endif()
@@ -50,6 +50,7 @@ pkg_check_modules(GSTREAMER REQUIRED IMPORTED_TARGET
     gstreamer-1.0>=1.22 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-rtp-1.0)
 
 qt_add_library(video-receiver STATIC src/video/VideoReceiver.cpp src/video/VideoReceiver.h
+    src/video/VideoPipeline.cpp src/video/VideoPipeline.h
     src/video/VideoTrace.cpp src/video/VideoTrace.h)
 target_include_directories(video-receiver PUBLIC src)
 target_link_libraries(video-receiver PUBLIC Qt6::Gui PkgConfig::GSTREAMER)
@@ -60,6 +61,10 @@ qt_add_library(metadata-receiver STATIC
     src/metadata/FrameSynchronizer.cpp src/metadata/FrameSynchronizer.h)
 target_include_directories(metadata-receiver PUBLIC src)
 target_link_libraries(metadata-receiver PUBLIC Qt6::Gui Qt6::Network)
+
+qt_add_library(application-controller STATIC src/app/ApplicationController.cpp src/app/ApplicationController.h)
+target_include_directories(application-controller PUBLIC src)
+target_link_libraries(application-controller PUBLIC video-receiver metadata-receiver)
 
 function(deploy_runtime target)
     if(WIN32)
@@ -86,6 +91,7 @@ endfunction()
 
 qt_add_executable(pc-application
     src/main.cpp
+    src/app/GuiPreview.cpp src/app/GuiPreview.h
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
     src/ui/VideoWidget.cpp
@@ -101,6 +107,7 @@ target_link_libraries(pc-application
         video-receiver
         metadata-receiver
         app-config
+        application-controller
 )
 
 deploy_runtime(pc-application)
@@ -124,7 +131,7 @@ if(BUILD_TESTING)
         src/ui/MainWindow.cpp src/ui/MainWindow.h src/ui/VideoWidget.cpp src/ui/VideoWidget.h
         src/ui/ClassLabels.cpp src/ui/ClassLabels.h)
     set_target_properties(video-integration-test PROPERTIES WIN32_EXECUTABLE FALSE)
-    target_link_libraries(video-integration-test PRIVATE video-receiver metadata-receiver app-config Qt6::Widgets Qt6::Test)
+    target_link_libraries(video-integration-test PRIVATE application-controller app-config Qt6::Widgets Qt6::Test)
     add_dependencies(video-integration-test pc-application mock-video-sender)
     deploy_runtime(video-integration-test)
     add_test(NAME video-integration COMMAND video-integration-test -o -,txt)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QSet>
 #include "VideoWidget.h"
 #include "video/VideoCodec.h"
 
@@ -13,7 +14,8 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
-    explicit MainWindow(QWidget *parent = nullptr, bool dummyPreview = true);
+    explicit MainWindow(QWidget *parent = nullptr);
+    void resetReception();
     void setDisplayFrame(const QImage &image, const QVector<TrackBox> &tracks, quint64 frameId = 0);
     void setVideoFps(double fps);
     void setVideoProcessingTime(double milliseconds);
@@ -40,4 +42,5 @@ private:
     QLabel *videoCodecLabel;
     QLabel *metadataFpsLabel;
     QLabel *trackCountLabel;
+    QSet<quint32> availableTrackIds;
 };

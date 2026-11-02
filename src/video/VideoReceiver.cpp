@@ -1,5 +1,6 @@
 #include "VideoReceiver.h"
 #include "GStreamerRuntime.h"
+#include "VideoPipeline.h"
 
 #include <gst/app/gstappsink.h>
 #include <gst/rtp/gstrtpbuffer.h>
@@ -24,7 +25,7 @@ bool VideoReceiver::start(quint16 port, const QString &tracePath, uint latencyMs
     configureGStreamerRuntime();
     GError *error = nullptr;
     if (!gst_init_check(nullptr, nullptr, &error)) {
-        emit errorOccurred(QString::fromUtf8(error->message));
+        emit errorOccurred(error ? QString::fromUtf8(error->message) : "Cannot initialize GStreamer");
         g_clear_error(&error);
         return false;
     }
@@ -33,17 +34,7 @@ bool VideoReceiver::start(quint16 port, const QString &tracePath, uint latencyMs
                            + tracePath + "; " + packetTracePath);
         return false;
     }
-    // These buffering values are PoC settings, not final integration defaults.
-    const bool jpeg = codec == Codec::JPEG;
-    const QString description = QString(
-        "udpsrc name=input port=%1 caps=\"application/x-rtp,media=video,encoding-name=%3,clock-rate=90000,payload=%4\" "
-        "! rtpjitterbuffer latency=%2 drop-on-latency=true "
-        "! %5 ! videoconvert "
-        "! video/x-raw,format=RGB,width=640,height=480 "
-        "! appsink name=frames sync=false max-buffers=1 drop=true wait-on-eos=false")
-        .arg(port).arg(latencyMs).arg(jpeg ? "JPEG" : "H264").arg(jpeg ? 26 : 96)
-        .arg(jpeg ? "rtpjpegdepay name=depay ! jpegdec"
-                  : "rtph264depay name=depay ! h264parse ! avdec_h264 max-threads=1");
+    const QString description = makeReceiverPipeline(codec, port, latencyMs);
     pipeline = gst_parse_launch(description.toUtf8().constData(), &error);
     if (error || !pipeline) {
         const QString message = error ? QString::fromUtf8(error->message) : "Cannot create video pipeline";
@@ -53,17 +44,24 @@ bool VideoReceiver::start(quint16 port, const QString &tracePath, uint latencyMs
         return false;
     }
     sink = gst_bin_get_by_name(GST_BIN(pipeline), "frames");
-    GstElement *depay = gst_bin_get_by_name(GST_BIN(pipeline), "depay");
-    GstPad *pad = gst_element_get_static_pad(depay, "sink");
-    gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, &VideoReceiver::inspectRtp, this, nullptr);
-    gst_object_unref(pad);
-    gst_object_unref(depay);
-    GstElement *input = gst_bin_get_by_name(GST_BIN(pipeline), "input");
-    pad = gst_element_get_static_pad(input, "src");
-    gst_pad_add_probe(pad, GstPadProbeType(GST_PAD_PROBE_TYPE_BUFFER | GST_PAD_PROBE_TYPE_BUFFER_LIST),
-        &VideoReceiver::inspectIncomingRtp, this, nullptr);
-    gst_object_unref(pad);
-    gst_object_unref(input);
+    const auto addProbe = [this](const char *elementName, const char *padName,
+                                GstPadProbeType type, GstPadProbeCallback callback) {
+        GstElement *element = gst_bin_get_by_name(GST_BIN(pipeline), elementName);
+        if (!element) return false;
+        GstPad *pad = gst_element_get_static_pad(element, padName);
+        gst_object_unref(element);
+        if (!pad) return false;
+        const auto probe = gst_pad_add_probe(pad, type, callback, this, nullptr);
+        gst_object_unref(pad);
+        return probe != 0;
+    };
+    if (!sink || !addProbe("depay", "sink", GST_PAD_PROBE_TYPE_BUFFER, &VideoReceiver::inspectRtp)
+        || !addProbe("input", "src", GstPadProbeType(GST_PAD_PROBE_TYPE_BUFFER | GST_PAD_PROBE_TYPE_BUFFER_LIST),
+                     &VideoReceiver::inspectIncomingRtp)) {
+        stop();
+        emit errorOccurred("Cannot attach video pipeline observers");
+        return false;
+    }
     bus = gst_element_get_bus(pipeline);
     if (gst_element_set_state(pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
         stop();

@@ -15,9 +15,15 @@ void VideoWidget::setDisplayFrame(const QImage &newImage, const QVector<TrackBox
                                   quint64 frameId)
 {
     // Replace image and overlays together so old boxes cannot survive a new frame.
-    image = newImage.copy();
+    image = newImage; // The receiver already owns the pixels; QImage shares them safely.
     tracks = newImage.isNull() ? QVector<TrackBox>{} : newTracks;
-    pendingFrameId = newImage.isNull() ? 0 : frameId;
+    if (newImage.isNull()) {
+        pendingFrameId = 0;
+        lastFrameId = 0;
+    } else if (frameId != lastFrameId) {
+        pendingFrameId = frameId;
+        lastFrameId = frameId;
+    }
     update();
 }
 

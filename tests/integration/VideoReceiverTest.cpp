@@ -2,6 +2,7 @@
 #include <QComboBox>
 #include <QDir>
 #include <QLabel>
+#include <QPushButton>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSignalSpy>
@@ -12,6 +13,7 @@
 #include "metadata/MetadataReceiver.h"
 #include "metadata/FrameSynchronizer.h"
 #include "config/AppConfig.h"
+#include "app/ApplicationController.h"
 
 class VideoReceiverTest : public QObject
 {
@@ -79,7 +81,7 @@ private slots:
         QVERIFY(write("video: [\n"));
         QVERIFY_EXCEPTION_THROWN(loadAppConfig(path), std::runtime_error);
         QVERIFY_EXCEPTION_THROWN(loadAppConfig(directory.filePath("missing.yaml")), std::runtime_error);
-        MainWindow window(nullptr, false);
+        MainWindow window;
         QVERIFY(!window.findChild<QComboBox *>("videoCodec"));
         window.setVideoCodec(VideoCodec::H264);
         QCOMPARE(window.findChild<QLabel *>("videoCodec")->text(), QString("H.264"));
@@ -302,7 +304,7 @@ private slots:
         QCOMPARE(metadata.tracks.size(), 1);
 
         FrameSynchronizer sync;
-        MainWindow window(nullptr, false);
+        MainWindow window;
         connect(&sync, &FrameSynchronizer::frameReady, &window, &MainWindow::setDisplayFrame);
         connect(&sync, &FrameSynchronizer::trackCountsChanged, &window, &MainWindow::setTrackCounts);
         auto *count = window.findChild<QLabel *>("trackCount");
@@ -393,6 +395,9 @@ private slots:
         QCOMPARE(painted.first().first().toULongLong(), quint64(2));
         widget.repaint();
         QCOMPARE(painted.count(), 1);
+        widget.setDisplayFrame(image, {{7, QRectF(100, 50, 200, 100)}}, 2);
+        widget.repaint();
+        QCOMPARE(painted.count(), 1); // A metadata-only overlay update is not a new frame.
         widget.setDisplayFrame({}, {}, 3);
         widget.repaint();
         QCOMPARE(painted.count(), 1);
@@ -457,6 +462,100 @@ private slots:
         QCOMPARE(file.readAll().count("receiver,"), 600);
     }
 
+    void stableTrackList()
+    {
+        MainWindow window;
+        auto *combo = window.findChild<QComboBox *>("trackCombo");
+        QImage image(640, 480, QImage::Format_RGB888);
+        image.fill(Qt::gray);
+        window.setDisplayFrame(image, {{7, QRectF(100, 50, 200, 100), 0}}, 1);
+        combo->setEditText("4294967295");
+        QSignalSpy removed(combo->model(), &QAbstractItemModel::rowsRemoved);
+        window.setDisplayFrame(image, {{7, QRectF(105, 50, 200, 100), 0}}, 2);
+        QCOMPARE(removed.count(), 0); // A moving box must not rebuild an open selection list.
+        QCOMPARE(combo->currentText(), QString("4294967295"));
+        QSignalSpy selected(&window, &MainWindow::targetSetRequested);
+        QTest::mouseClick(window.findChild<QPushButton *>("trackButton"), Qt::LeftButton);
+        QCOMPARE(selected.count(), 1);
+        QCOMPARE(selected[0][0].toUInt(), quint32(0xffffffff));
+        window.resetReception();
+        QCOMPARE(combo->count(), 0);
+        QCOMPARE(window.findChild<QLabel *>("trackCount")->text(), QString("--"));
+    }
+
+    void controllerStartupRecovery()
+    {
+        ApplicationController controller;
+        QSignalSpy errors(&controller, &ApplicationController::errorOccurred);
+        ReceiverSettings settings;
+        settings.videoPort = 15010;
+        settings.metadataPort = 15011;
+        QTemporaryDir directory;
+        settings.tracePath = directory.filePath("missing/trace.csv");
+        QVERIFY(!controller.start(settings));
+        QCOMPARE(errors.count(), 1);
+        QUdpSocket probe;
+        QVERIFY(probe.bind(QHostAddress::AnyIPv4, settings.metadataPort, QAbstractSocket::DontShareAddress));
+        probe.close(); // Failed video startup must release the already-bound metadata socket.
+        settings.tracePath.clear();
+        QVERIFY(controller.start(settings));
+        controller.stop();
+        QVERIFY(probe.bind(QHostAddress::AnyIPv4, settings.metadataPort, QAbstractSocket::DontShareAddress));
+        probe.close();
+        settings.metadataPort = settings.videoPort;
+        QVERIFY(!controller.start(settings));
+        QCOMPARE(errors.count(), 2);
+    }
+
+    void receiveUsingController_data() { receiveAndRestart_data(); }
+
+    void receiveUsingController()
+    {
+        QFETCH(QString, codecName);
+        ReceiverSettings settings;
+        settings.videoPort = 15010;
+        settings.metadataPort = 15011;
+        settings.codec = codecName == "jpeg" ? VideoCodec::JPEG : VideoCodec::H264;
+        ApplicationController controller;
+        MainWindow window;
+        connect(&controller, &ApplicationController::frameReady, &window, &MainWindow::setDisplayFrame);
+        connect(&controller, &ApplicationController::trackCountsChanged, &window, &MainWindow::setTrackCounts);
+        connect(&controller, &ApplicationController::streamReset, &window, &MainWindow::resetReception);
+        connect(&window, &MainWindow::framePainted, &controller, &ApplicationController::recordPaint);
+        window.show();
+        QSignalSpy errors(&controller, &ApplicationController::errorOccurred);
+        QSignalSpy counts(&controller, &ApplicationController::trackCountsChanged);
+        for (int run = 0; run < 2; ++run) {
+            QTemporaryDir directory;
+            settings.tracePath = directory.filePath("frames.csv");
+            QVERIFY(controller.start(settings));
+            auto *count = window.findChild<QLabel *>("trackCount");
+            QCOMPARE(count->text(), QString("--"));
+            QProcess sender;
+            sender.setProgram(QCoreApplication::applicationDirPath() + "/mock-video-sender");
+            sender.setArguments({"--port", "15010", "--metadata-port", "15011", "--frames", "45", "--codec", codecName});
+            sender.start();
+            QVERIFY(sender.waitForStarted());
+            QTRY_COMPARE_WITH_TIMEOUT(count->text(), QString("1"), 5000);
+            QTRY_VERIFY_WITH_TIMEOUT(sender.state() == QProcess::NotRunning, 5000);
+            QCOMPARE(sender.exitCode(), 0);
+            controller.stop();
+            QCOMPARE(count->text(), QString("--"));
+            QCOMPARE(window.findChild<QComboBox *>("trackCombo")->count(), 0);
+            QVERIFY(!counts.isEmpty());
+            QCOMPARE(counts.last()[2].toBool(), false);
+            QFile trace(settings.tracePath);
+            QVERIFY(trace.open(QIODevice::ReadOnly));
+            int displayed = 0;
+            for (const auto &row : trace.readAll().split('\n')) {
+                const auto columns = row.split(',');
+                if (columns.size() == 17 && columns[14] == "1") ++displayed;
+            }
+            QVERIFY2(displayed > 10, "Controller did not record displayed frames");
+        }
+        QCOMPARE(errors.count(), 0);
+    }
+
     void receiveBoxes_data() { receiveAndRestart_data(); }
 
     void receiveBoxes()
@@ -466,7 +565,7 @@ private slots:
         VideoReceiver video;
         MetadataReceiver metadata;
         FrameSynchronizer sync;
-        MainWindow window(nullptr, false);
+        MainWindow window;
         ClassLabels labels;
         QVERIFY(labels.load(QFINDTESTDATA("../../config/class_names.txt")));
         window.setClassLabels(labels);
@@ -531,7 +630,7 @@ private slots:
         const QString outputDir = QCoreApplication::applicationDirPath();
         qputenv("GST_PLUGIN_PATH_1_0", (outputDir + "/gstreamer-1.0").toUtf8());
         VideoReceiver receiver;
-        MainWindow window(nullptr, false);
+        MainWindow window;
         window.setVideoCodec(codecName == "jpeg" ? VideoCodec::JPEG : VideoCodec::H264);
         window.show();
         QObject::connect(&receiver, &VideoReceiver::frameReady, &window,
@@ -651,7 +750,7 @@ private slots:
             QSKIP("Set LWIR_BOARD_VIDEO_HOST to this PC's board-reachable IP for MPP integration");
         QFETCH(QString, codecName);
         VideoReceiver receiver;
-        MainWindow window(nullptr, false);
+        MainWindow window;
         window.setVideoCodec(codecName == "jpeg" ? VideoCodec::JPEG : VideoCodec::H264);
         window.show();
         connect(&receiver, &VideoReceiver::frameReady, &window,
