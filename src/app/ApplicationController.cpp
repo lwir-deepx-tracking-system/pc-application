@@ -54,9 +54,9 @@ bool ApplicationController::start(const ReceiverSettings &settings)
         emit errorOccurred("Invalid receiver ports or jitter latency");
         return false;
     }
-    if (!metadata.start(settings.metadataPort)) return false;
+    if (!metadata.start(settings.metadataPort, settings.metadataBindAddress)) return false;
     if (!video.start(settings.videoPort, settings.tracePath, settings.latencyMs,
-                     settings.packetTracePath, settings.codec)) return false;
+                     settings.packetTracePath, settings.codec, settings.videoBindAddress)) return false;
     return true;
 }
 

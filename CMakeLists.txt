@@ -37,9 +37,9 @@ if(NOT yaml-cpp_FOUND)
     endblock()
 endif()
 
-add_library(app-config STATIC src/config/AppConfig.cpp src/config/AppConfig.h src/video/VideoCodec.h)
+add_library(app-config STATIC src/config/AppConfig.cpp src/config/AppConfig.h src/config/ReceiverSettings.h src/video/VideoCodec.h)
 target_include_directories(app-config PUBLIC src)
-target_link_libraries(app-config PUBLIC Qt6::Core PRIVATE yaml-cpp::yaml-cpp)
+target_link_libraries(app-config PUBLIC Qt6::Core PRIVATE Qt6::Network yaml-cpp::yaml-cpp)
 
 if(WIN32)
     set(GSTREAMER_ROOT "$ENV{GSTREAMER_1_0_ROOT_MSVC_X86_64}" CACHE PATH "GStreamer MSVC x64 installation")
@@ -64,6 +64,7 @@ qt_add_library(video-receiver STATIC src/video/VideoReceiver.cpp src/video/Video
     src/video/VideoTrace.cpp src/video/VideoTrace.h)
 target_include_directories(video-receiver PUBLIC src)
 target_link_libraries(video-receiver PUBLIC Qt6::Gui PkgConfig::GSTREAMER)
+target_link_libraries(video-receiver PRIVATE Qt6::Network)
 
 qt_add_library(metadata-receiver STATIC
     src/metadata/TrackingMetadata.cpp src/metadata/TrackingMetadata.h

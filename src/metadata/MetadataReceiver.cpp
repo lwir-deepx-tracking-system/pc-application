@@ -13,10 +13,15 @@ MetadataReceiver::MetadataReceiver(QObject *parent) : QObject(parent)
     });
 }
 
-bool MetadataReceiver::start(quint16 port)
+bool MetadataReceiver::start(quint16 port, const QString &bindAddress)
 {
     stop();
-    if (!port || !socket.bind(QHostAddress::AnyIPv4, port, QAbstractSocket::DontShareAddress)) {
+    const QHostAddress address(bindAddress);
+    if (!port || address.protocol() != QAbstractSocket::IPv4Protocol) {
+        emit errorOccurred("Invalid metadata IPv4 bind address or port");
+        return false;
+    }
+    if (!socket.bind(address, port, QAbstractSocket::DontShareAddress)) {
         emit errorOccurred(QString("Cannot receive metadata on UDP %1: %2").arg(port).arg(socket.errorString()));
         return false;
     }

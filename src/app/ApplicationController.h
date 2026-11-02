@@ -4,16 +4,7 @@
 #include "metadata/MetadataReceiver.h"
 #include "video/VideoReceiver.h"
 #include "control/ControlClient.h"
-
-struct ReceiverSettings
-{
-    quint16 videoPort = 5000;
-    quint16 metadataPort = 5001;
-    VideoCodec codec = VideoCodec::JPEG;
-    uint latencyMs = 50;
-    QString tracePath;
-    QString packetTracePath;
-};
+#include "config/ReceiverSettings.h"
 
 // Coordinates reception and user requests; the board owns operating state.
 class ApplicationController : public QObject

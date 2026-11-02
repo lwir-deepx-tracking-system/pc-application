@@ -11,7 +11,7 @@ class MetadataReceiver : public QObject
     Q_OBJECT
 public:
     explicit MetadataReceiver(QObject *parent = nullptr);
-    bool start(quint16 port = 5001);
+    bool start(quint16 port = 5001, const QString &bindAddress = "0.0.0.0");
     void stop();
 
 signals:

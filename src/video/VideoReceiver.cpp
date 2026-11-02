@@ -1,6 +1,7 @@
 #include "VideoReceiver.h"
 #include "GStreamerRuntime.h"
 #include "VideoPipeline.h"
+#include <QHostAddress>
 
 #include <gst/app/gstappsink.h>
 #include <gst/rtp/gstrtpbuffer.h>
@@ -19,9 +20,14 @@ VideoReceiver::~VideoReceiver()
 }
 
 bool VideoReceiver::start(quint16 port, const QString &tracePath, uint latencyMs,
-                          const QString &packetTracePath, Codec codec)
+                          const QString &packetTracePath, Codec codec, const QString &bindAddress)
 {
     stop();
+    const QHostAddress address(bindAddress);
+    if (!port || latencyMs > 10000 || address.protocol() != QAbstractSocket::IPv4Protocol) {
+        emit errorOccurred("Invalid video IPv4 bind address, port or latency");
+        return false;
+    }
     configureGStreamerRuntime();
     GError *error = nullptr;
     if (!gst_init_check(nullptr, nullptr, &error)) {
@@ -34,7 +40,7 @@ bool VideoReceiver::start(quint16 port, const QString &tracePath, uint latencyMs
                            + tracePath + "; " + packetTracePath);
         return false;
     }
-    const QString description = makeReceiverPipeline(codec, port, latencyMs);
+    const QString description = makeReceiverPipeline(codec, port, latencyMs, address.toString());
     pipeline = gst_parse_launch(description.toUtf8().constData(), &error);
     if (error || !pipeline) {
         const QString message = error ? QString::fromUtf8(error->message) : "Cannot create video pipeline";

@@ -19,25 +19,40 @@ class VideoReceiverTest : public QObject
 {
     Q_OBJECT
 private slots:
-    void launchConfiguredApplication_data() { receiveAndRestart_data(); }
+    void launchConfiguredApplication_data()
+    {
+        QTest::addColumn<QString>("codecName");
+        QTest::addColumn<bool>("overridePorts");
+        for (const auto &codec : {QString("jpeg"), QString("h264")}) {
+            QTest::newRow(qPrintable(codec + "-yaml")) << codec << false;
+            QTest::newRow(qPrintable(codec + "-override")) << codec << true;
+        }
+    }
 
     void launchConfiguredApplication()
     {
         QFETCH(QString, codecName);
+        QFETCH(bool, overridePorts);
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
         const QString configPath = directory.filePath("pc.yaml");
         QFile configFile(configPath);
         QVERIFY(configFile.open(QIODevice::WriteOnly));
-        configFile.write("video:\n  codec: " + codecName.toUtf8() + "\n");
+        const auto videoPort = overridePorts ? "15104" : "15004";
+        const auto metadataPort = overridePorts ? "15105" : "15005";
+        configFile.write("video:\n  codec: " + codecName.toUtf8()
+            + "\n  bind_address: 127.0.0.1\n  port: " + videoPort
+            + "\n  latency_ms: 20\nmetadata:\n  bind_address: 127.0.0.1\n  port: " + metadataPort + "\n");
         configFile.close();
         const auto outputDir = QCoreApplication::applicationDirPath();
         const auto tracePath = directory.filePath("receiver.csv");
         QProcess application;
         application.setWorkingDirectory(directory.path());
         application.setProgram(outputDir + "/pc-application");
-        application.setArguments({"--config", configPath, "--video-port", "15004",
-                                  "--metadata-port", "15005", "--video-trace", tracePath});
+        QStringList arguments{"--config", configPath, "--video-trace", tracePath};
+        if (overridePorts) arguments << "--video-port" << "15004" << "--metadata-port" << "15005"
+                                     << "--video-latency" << "30";
+        application.setArguments(arguments);
         application.start();
         QVERIFY(application.waitForStarted());
         QProcess sender;
@@ -71,9 +86,9 @@ private slots:
             return file.open(QIODevice::WriteOnly) && file.write(contents) == contents.size();
         };
         QVERIFY(write("video:\n  codec: h264\n"));
-        QCOMPARE(loadAppConfig(path).videoCodec, VideoCodec::H264);
+        QCOMPARE(loadAppConfig(path).receiver.codec, VideoCodec::H264);
         QVERIFY(write("# Receiver settings\nvideo:\n  codec: 'jpeg' # matches board\n"));
-        QCOMPARE(loadAppConfig(path).videoCodec, VideoCodec::JPEG);
+        QCOMPARE(loadAppConfig(path).receiver.codec, VideoCodec::JPEG);
         QVERIFY(write("video:\n  codec: vp9\n"));
         QVERIFY_EXCEPTION_THROWN(loadAppConfig(path), std::runtime_error);
         QVERIFY(write("video: {}\n"));
@@ -87,6 +102,75 @@ private slots:
         QCOMPARE(window.findChild<QLabel *>("videoCodec")->text(), QString("H.264"));
         window.setVideoCodec(VideoCodec::JPEG);
         QCOMPARE(window.findChild<QLabel *>("videoCodec")->text(), QString("JPEG"));
+    }
+
+    void yamlNetworkSettings()
+    {
+        QTemporaryDir directory;
+        const auto path = directory.filePath("pc.yaml");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("video:\n  codec: jpeg\n  bind_address: 127.0.0.1\n  port: 15100\n  latency_ms: 0\n"
+                   "metadata:\n  bind_address: 0.0.0.0\n  port: 15101\n"
+                   "control:\n  enabled: true\n  host: board.example\n  port: 15102\n");
+        file.close();
+        const auto config = loadAppConfig(path);
+        QCOMPARE(config.receiver.videoPort, quint16(15100));
+        QCOMPARE(config.receiver.metadataPort, quint16(15101));
+        QCOMPARE(config.receiver.videoBindAddress, QString("127.0.0.1"));
+        QCOMPARE(config.receiver.metadataBindAddress, QString("0.0.0.0"));
+        QCOMPARE(config.receiver.latencyMs, uint(0));
+        QCOMPARE(config.control.host, QString("board.example")); // Peer hostnames are allowed.
+        QCOMPARE(config.control.port, quint16(15102));
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write("video:\n  codec: h264\n");
+        file.close();
+        const auto defaults = loadAppConfig(path).receiver;
+        QCOMPARE(defaults.videoPort, quint16(5000));
+        QCOMPARE(defaults.metadataPort, quint16(5001));
+        QCOMPARE(defaults.latencyMs, uint(50));
+        QCOMPARE(defaults.videoBindAddress, QString("0.0.0.0"));
+    }
+
+    void invalidYamlNetworkSettings_data()
+    {
+        QTest::addColumn<QByteArray>("yaml");
+        QTest::newRow("zero-port") << QByteArray("video:\n  codec: jpeg\n  port: 0\n");
+        QTest::newRow("port-overflow") << QByteArray("video:\n  codec: jpeg\n  port: 65536\n");
+        QTest::newRow("negative-latency") << QByteArray("video:\n  codec: jpeg\n  latency_ms: -1\n");
+        QTest::newRow("large-latency") << QByteArray("video:\n  codec: jpeg\n  latency_ms: 10001\n");
+        QTest::newRow("bad-video-address") << QByteArray("video:\n  codec: jpeg\n  bind_address: board.example\n");
+        QTest::newRow("ipv6-bind") << QByteArray("video:\n  codec: jpeg\n  bind_address: '::1'\n");
+        QTest::newRow("pipeline-injection") << QByteArray("video:\n  codec: jpeg\n  bind_address: '127.0.0.1 ! fakesink'\n");
+        QTest::newRow("metadata-type") << QByteArray("video:\n  codec: jpeg\nmetadata: []\n");
+        QTest::newRow("bad-metadata-address") << QByteArray("video:\n  codec: jpeg\nmetadata:\n  bind_address: ''\n");
+        QTest::newRow("bad-metadata-port") << QByteArray("video:\n  codec: jpeg\nmetadata:\n  port: -1\n");
+        QTest::newRow("duplicate-udp-port") << QByteArray("video:\n  codec: jpeg\n  port: 5001\n");
+    }
+
+    void invalidYamlNetworkSettings()
+    {
+        QFETCH(QByteArray, yaml);
+        QTemporaryDir directory;
+        QFile file(directory.filePath("pc.yaml"));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(yaml);
+        file.close();
+        QVERIFY_EXCEPTION_THROWN(loadAppConfig(file.fileName()), std::runtime_error);
+    }
+
+    void invalidReceiverBindAddresses()
+    {
+        MetadataReceiver metadata;
+        QSignalSpy metadataErrors(&metadata, &MetadataReceiver::errorOccurred);
+        QVERIFY(!metadata.start(15103, "board.example"));
+        QCOMPARE(metadataErrors.count(), 1);
+        QVERIFY(metadata.start(15103, "127.0.0.1"));
+        metadata.stop();
+        VideoReceiver video;
+        QSignalSpy videoErrors(&video, &VideoReceiver::errorOccurred);
+        QVERIFY(!video.start(15104, {}, 50, {}, VideoCodec::JPEG, "127.0.0.1 ! fakesink"));
+        QCOMPARE(videoErrors.count(), 1);
     }
 
     void classLabels()
@@ -490,6 +574,8 @@ private slots:
         ApplicationController controller;
         QSignalSpy errors(&controller, &ApplicationController::errorOccurred);
         ReceiverSettings settings;
+        settings.videoBindAddress = "127.0.0.1";
+        settings.metadataBindAddress = "127.0.0.1";
         settings.videoPort = 15010;
         settings.metadataPort = 15011;
         QTemporaryDir directory;
@@ -515,6 +601,8 @@ private slots:
     {
         QFETCH(QString, codecName);
         ReceiverSettings settings;
+        settings.videoBindAddress = "127.0.0.1";
+        settings.metadataBindAddress = "127.0.0.1";
         settings.videoPort = 15010;
         settings.metadataPort = 15011;
         settings.codec = codecName == "jpeg" ? VideoCodec::JPEG : VideoCodec::H264;

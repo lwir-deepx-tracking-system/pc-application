@@ -8,6 +8,8 @@
 #include <QDebug>
 #include <QFileInfo>
 #include <exception>
+#include <stdexcept>
+#include <string>
 
 int main(int argc, char *argv[])
 {
@@ -19,30 +21,34 @@ int main(int argc, char *argv[])
     parser.addOption({"gui-preview", "Show a synthetic preview without receiving video."});
     parser.addOption({"video-trace", "Write frame summary CSV.", "path"});
     parser.addOption({"video-packet-trace", "Optional pre-jitter RTP packet CSV.", "path"});
-    parser.addOption({"video-port", "UDP video port.", "port", "5000"});
-    parser.addOption({"metadata-port", "UDP tracking metadata port (LWIR, 28-byte header / 25-byte tracks).", "port", "5001"});
+    parser.addOption({"video-port", "Override YAML video.port.", "port"});
+    parser.addOption({"metadata-port", "Override YAML metadata.port.", "port"});
     parser.addOption({"config", "Application YAML file (default: config/pc-application.yaml).", "path"});
     parser.addOption({"class-names", "UTF-8 class names file, one name per line starting at class 0.", "path"});
-    parser.addOption({"video-latency", "PoC jitter buffer latency in milliseconds.", "ms", "50"});
+    parser.addOption({"video-latency", "Override YAML video.latency_ms.", "ms"});
     parser.process(app);
-    bool portOk = false;
-    bool latencyOk = false;
-    bool metadataPortOk = false;
-    const uint port = parser.value("video-port").toUInt(&portOk);
-    const uint latency = parser.value("video-latency").toUInt(&latencyOk);
-    const uint metadataPort = parser.value("metadata-port").toUInt(&metadataPortOk);
-    if (!portOk || port == 0 || port > 65535 || !latencyOk || latency > 10000
-        || !metadataPortOk || metadataPort == 0 || metadataPort > 65535 || metadataPort == port)
-        parser.showHelp(1);
-
     QString configPath = parser.isSet("config") ? parser.value("config") : "config/pc-application.yaml";
     if (!parser.isSet("config") && !QFileInfo::exists(configPath))
         configPath = QCoreApplication::applicationDirPath() + "/config/pc-application.yaml";
     AppConfig config;
     try {
         config = loadAppConfig(configPath);
+        const auto overrideValue = [&parser](const char *name, uint fallback, uint min, uint max) {
+            if (!parser.isSet(name)) return fallback;
+            bool valid = false;
+            const auto value = parser.value(name).toUInt(&valid);
+            if (!valid || value < min || value > max)
+                throw std::runtime_error(std::string("Invalid --") + name);
+            return value;
+        };
+        auto &settings = config.receiver;
+        settings.videoPort = quint16(overrideValue("video-port", settings.videoPort, 1, 65535));
+        settings.metadataPort = quint16(overrideValue("metadata-port", settings.metadataPort, 1, 65535));
+        settings.latencyMs = overrideValue("video-latency", settings.latencyMs, 0, 10000);
+        if (settings.videoPort == settings.metadataPort)
+            throw std::runtime_error("Video and metadata UDP ports must differ");
     } catch (const std::exception &error) {
-        qCritical().noquote() << "Config:" << configPath << error.what();
+        qCritical().noquote() << "Settings:" << configPath << error.what();
         return 1;
     }
 
@@ -56,7 +62,7 @@ int main(int argc, char *argv[])
         if (parser.isSet("class-names")) return 1;
     }
     window.setClassLabels(classLabels);
-    window.setVideoCodec(config.videoCodec);
+    window.setVideoCodec(config.receiver.codec);
     ApplicationController controller;
     QObject::connect(&controller, &ApplicationController::frameReady, &window, &MainWindow::setDisplayFrame);
     QObject::connect(&controller, &ApplicationController::trackCountsChanged, &window, &MainWindow::setTrackCounts);
@@ -82,11 +88,7 @@ int main(int argc, char *argv[])
     if (parser.isSet("gui-preview")) {
         showGuiPreview(window);
     } else {
-        ReceiverSettings settings;
-        settings.videoPort = static_cast<quint16>(port);
-        settings.metadataPort = static_cast<quint16>(metadataPort);
-        settings.codec = config.videoCodec;
-        settings.latencyMs = latency;
+        ReceiverSettings settings = config.receiver;
         settings.tracePath = parser.value("video-trace");
         settings.packetTracePath = parser.value("video-packet-trace");
         if (!controller.start(settings)) return 1;

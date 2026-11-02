@@ -18,7 +18,8 @@ public:
     explicit VideoReceiver(QObject *parent = nullptr);
     ~VideoReceiver() override;
     bool start(quint16 port = 5000, const QString &tracePath = {}, uint latencyMs = 50,
-               const QString &packetTracePath = {}, Codec codec = Codec::JPEG);
+               const QString &packetTracePath = {}, Codec codec = Codec::JPEG,
+               const QString &bindAddress = "0.0.0.0");
     void stop();
     void recordPaint(quint64 frameId, qint64 monotonicNs);
 

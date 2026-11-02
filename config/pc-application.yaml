@@ -1,5 +1,12 @@
 video:
   codec: h264  # h264 or jpeg; must match the board sender.
+  bind_address: 0.0.0.0  # Local PC address; 0.0.0.0 receives on all IPv4 interfaces.
+  port: 5000
+  latency_ms: 50
+
+metadata:
+  bind_address: 0.0.0.0
+  port: 5001`
 
 control:
   enabled: true

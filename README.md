@@ -57,6 +57,12 @@ video:
 
 ### 수신 구조
 
+연결 설정은 `config/pc-application.yaml` 하나에서 관리한다. `video.bind_address` / `video.port`, `metadata.bind_address` / `metadata.port`는 PC의 UDP 수신 주소·포트이고, `control.host` / `control.port`는 PC가 TCP로 접속할 상대 서버 주소·포트다. `video.latency_ms`도 YAML에서 설정한다.
+
+`bind_address: 0.0.0.0`은 모든 IPv4 인터페이스에서 수신한다. 특정 PC 주소를 넣으면 해당 로컬 주소로 수신하며, 보드 IP를 넣는 항목이 아니다. 보드가 영상을 보낼 PC IP는 runtime 송신 설정에 넣는다. TCP의 `host`는 IP와 호스트 이름을 사용할 수 있고 UDP `bind_address`는 IPv4 주소만 지원한다.
+
+YAML을 기본으로 읽고, `--video-port`, `--metadata-port`, `--video-latency`를 명시한 경우에만 그 값을 덮어쓴다. 기본 UDP 포트는 5000/5001, 지연은 50ms다. 포트는 1~65535이며 두 UDP 포트는 달라야 한다. 잘못된 주소·범위의 설정은 시작 전에 거절한다. 설정 변경 후 앱을 재시작하면 되며 코드 재빌드는 필요 없다.
+
 `src/app/ApplicationController`는 영상·메타데이터 수신부와 `FrameSynchronizer`를 소유하고 시작·종료·초기화를 관리한다. 시작 실패 시 열린 소켓을 정리하며, 정지·오류·stream 변경 시 표시 상태를 초기화한다. `main.cpp`는 실행 설정과 UI 연결을 담당한다.
 
 `MainWindow` / `VideoWidget`은 표시와 사용자 입력을 처리한다. `ApplicationController`가 `ControlClient`에 운용 요청을 전달하며, 실제 운용 상태는 보드의 INIT / STATUS로 갱신한다. 영상 수신 여부와 TCP 제어 연결 상태는 별개다. `ControlProtocol`은 직렬화·파싱을, `ManualInputHandler`는 키 상태와 방향 합성을 담당한다.
