@@ -10,8 +10,7 @@ metadata:
 
 control:
   enabled: true
-  host: 127.0.0.1  # Local mock server; use the board IP after runtime integration.
-  port: 5002
+  host: 192.168.50.2
   ping_interval_ms: 500
   ack_timeout_ms: 1500
   connect_timeout_ms: 2000
