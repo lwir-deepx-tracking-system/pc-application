@@ -17,5 +17,5 @@ control:
   reconnect_interval_ms: 1000
 
 performance:
-  enabled: false
+  enabled: true
   output_dir: logs  # Relative to this YAML file; one timestamp-named CSV per run.
