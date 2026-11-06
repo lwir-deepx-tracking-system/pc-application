@@ -10,4 +10,6 @@ struct ControlSettings {
     int ackTimeoutMs = 1500;
     int connectTimeoutMs = 2000;
     int reconnectIntervalMs = 1000;
+    bool modelSwitchEnabled = false; // Enabled by a nonempty PC model catalog.
+    int modelSwitchTimeoutMs = 30000;
 };

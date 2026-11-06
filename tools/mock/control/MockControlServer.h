@@ -22,6 +22,8 @@ public:
     void setHomeDuration(int ms) { homeTimer.setInterval(ms); }
     void setHeartbeatTimeout(int ms) { heartbeatTimeoutMs = ms; }
     void setPingReplies(bool enabled) { pingReplies = enabled; }
+    void setModelResult(Control::PipelineResult result) { modelResult = result; }
+    void setModelDuration(int ms) { modelDurationMs = ms; }
     void reinitialize();
     void publishState(const Control::BoardState &next);
 
@@ -43,4 +45,7 @@ private:
     qint64 lastPing = 0;
     int heartbeatTimeoutMs = 2000;
     bool pingReplies = true;
+    bool modelBusy = false;
+    int modelDurationMs = 200;
+    Control::PipelineResult modelResult = Control::PipelineResult::Ok;
 };

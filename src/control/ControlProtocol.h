@@ -7,7 +7,17 @@
 namespace Control {
 constexpr quint32 Magic = 0x4c574952;
 constexpr int HeaderSize = 8;
-enum class Category : quint8 { System = 1, Mode = 2, Gimbal = 3 };
+enum class Category : quint8 { System = 1, Mode = 2, Gimbal = 3, Pipeline = 4 };
+enum class PipelineCommand : quint8 { ModelCount = 1, TrackerCount = 2, ChangeModel = 3, ChangeTracker = 4,
+    ModelCountReply = 0x81, TrackerCountReply = 0x82, ModelResult = 0x83, TrackerResult = 0x84 };
+enum class PipelinePhase : quint8 { Accepted = 1, Completed = 2 };
+enum class PipelineResult : quint8 { Ok, InvalidId, Busy, CreationFailed, Restored, RestoreFailed, NotReady };
+
+struct ModelState {
+    quint32 count = 0, currentId = 0, requestedId = 0;
+    bool countKnown = false, busy = false;
+    QString status = "Not connected";
+};
 enum class System : quint8 { Ack = 1, Init = 2, Status = 3, Ping = 4 };
 enum class ModeCommand : quint8 { Auto = 1, Manual = 2 };
 enum class GimbalCommand : quint8 { Move = 1, Home = 3 };
@@ -46,7 +56,9 @@ bool decodeState(const QByteArray &payload, BoardState &state);
 bool decodeAck(const QByteArray &payload, Ack &ack);
 QString resultName(Result result);
 QString commandName(Category category, quint8 command);
+QString pipelineResultName(PipelineResult result);
 }
+Q_DECLARE_METATYPE(Control::ModelState)
 Q_DECLARE_METATYPE(Control::BoardState)
 Q_DECLARE_METATYPE(Control::Connection)
 Q_DECLARE_METATYPE(Control::Message)

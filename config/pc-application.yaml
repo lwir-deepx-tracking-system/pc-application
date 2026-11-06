@@ -15,6 +15,14 @@ control:
   ack_timeout_ms: 1500
   connect_timeout_ms: 2000
   reconnect_interval_ms: 1000
+  model_switch_timeout_ms: 30000
+
+# Display names only. IDs must match the board's model_catalog (1..count).
+models:
+  - id: 1
+    name: YOLOv8n
+  - id: 2
+    name: YOLO26s
 
 performance:
   enabled: true

@@ -4,6 +4,7 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QHostAddress>
+#include <QSet>
 #include <stdexcept>
 #include <yaml-cpp/yaml.h>
 
@@ -66,7 +67,24 @@ AppConfig loadAppConfig(const QString &path)
             settings.ackTimeoutMs = interval("ack_timeout_ms", 1500);
             settings.connectTimeoutMs = interval("connect_timeout_ms", 2000);
             settings.reconnectIntervalMs = interval("reconnect_interval_ms", 1000);
+            settings.modelSwitchTimeoutMs = interval("model_switch_timeout_ms", 30000);
         }
+        const auto models = root["models"];
+        if (models) {
+            if (!models.IsSequence()) throw std::runtime_error("models must be a sequence");
+            QSet<quint32> ids;
+            for (const auto &entry : models) {
+                if (!entry.IsMap() || !entry["id"] || !entry["name"])
+                    throw std::runtime_error("models entries require id and name");
+                const auto id = entry["id"].as<quint64>();
+                const auto name = QString::fromStdString(entry["name"].as<std::string>()).trimmed();
+                if (!id || id > 0xffffffffULL || ids.contains(quint32(id)) || name.isEmpty())
+                    throw std::runtime_error("models requires unique positive uint32 IDs and nonempty names");
+                ids.insert(quint32(id));
+                config.models.push_back({quint32(id), name});
+            }
+        }
+        config.control.modelSwitchEnabled = !config.models.isEmpty();
         const auto performance = root["performance"];
         QString outputDir = "logs";
         if (performance) {

@@ -49,6 +49,15 @@ ApplicationController::ApplicationController(QObject *parent) : QObject(parent)
     });
     connect(&control, &ControlClient::commandFinished, this, &ApplicationController::commandFinished);
     connect(&control, &ControlClient::errorOccurred, this, &ApplicationController::controlError);
+    connect(&control, &ControlClient::modelStateChanged, this, [this](const Control::ModelState &state) {
+        if (state.busy && !modelWasBusy) {
+            emit inputResetRequested();
+            resetStream();
+        }
+        modelWasBusy = state.busy;
+        emit modelStateChanged(state);
+        emit manualInputEnabledChanged(control.canControl());
+    });
 }
 
 ApplicationController::~ApplicationController()
@@ -110,6 +119,7 @@ void ApplicationController::fail(const QString &message)
 void ApplicationController::startControl(const ControlSettings &settings) { control.start(settings); }
 void ApplicationController::requestAuto(quint32 id) { control.requestAuto(id); }
 void ApplicationController::requestManual() { control.requestManual(); }
+void ApplicationController::requestModel(quint32 id) { control.requestModel(id); }
 void ApplicationController::requestHome()
 {
     if (control.requestHome()) emit inputResetRequested();

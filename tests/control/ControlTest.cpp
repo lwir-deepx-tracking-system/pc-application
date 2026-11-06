@@ -48,6 +48,160 @@ class ControlTest : public QObject
 {
     Q_OBJECT
 private slots:
+    void modelWireAndFragmentedResults()
+    {
+        using namespace Control;
+        QCOMPARE(encode({Category::Pipeline, 3, QByteArray::fromHex("0000000a00000002")}),
+            QByteArray::fromHex("4c574952040300080000000a00000002"));
+        QVERIFY(!needsAck(Category::Pipeline, 3));
+        RawBoard board;
+        QVERIFY(board.server.listen(QHostAddress::LocalHost, 0));
+        auto settings = settingsFor(board.server.serverPort());
+        settings.modelSwitchEnabled = true;
+        ControlClient client;
+        QSignalSpy states(&client, &ControlClient::modelStateChanged);
+        client.start(settings);
+        QTRY_VERIFY(board.peer() && board.peer()->bytesAvailable() >= 12);
+        QCOMPARE(board.peer()->readAll(), QByteArray::fromHex("4c5749520401000400000001"));
+        board.peer()->write(QByteArray::fromHex("4c574952048100080000000100000002"));
+        QTRY_VERIFY(qvariant_cast<ModelState>(states.last()[0]).countKnown);
+        QCOMPARE(qvariant_cast<ModelState>(states.last()[0]).currentId, quint32(0));
+        QVERIFY(!client.requestModel(3));
+        QVERIFY(client.requestModel(2));
+        QVERIFY(!client.requestModel(1));
+        QVERIFY(!client.sendMove(1, 0));
+        QTRY_VERIFY(board.peer()->bytesAvailable() >= 16);
+        QCOMPARE(board.peer()->readAll(), QByteArray::fromHex("4c574952040300080000000200000002"));
+        // Wrong request IDs must never finish the pending operation.
+        board.peer()->write(QByteArray::fromHex("4c57495204830006000000630200"));
+        const auto accepted = QByteArray::fromHex("4c57495204830006000000020100");
+        board.peer()->write(accepted.left(9));
+        QTest::qWait(30);
+        QVERIFY(qvariant_cast<ModelState>(states.last()[0]).busy);
+        board.peer()->write(accepted.mid(9));
+        QTRY_COMPARE(qvariant_cast<ModelState>(states.last()[0]).status, QString("Switching model"));
+        QCOMPARE(qvariant_cast<ModelState>(states.last()[0]).currentId, quint32(0));
+        board.peer()->write(QByteArray::fromHex("4c57495204830006000000020200") + manualStatus);
+        QTRY_COMPARE(qvariant_cast<ModelState>(states.last()[0]).currentId, quint32(2));
+        QVERIFY(!qvariant_cast<ModelState>(states.last()[0]).busy);
+        QVERIFY(client.canControl());
+        QVERIFY(client.requestModel(1));
+        // Rejections are Completed-only, with no Accepted and no System ACK.
+        board.peer()->write(QByteArray::fromHex("4c57495204830006000000030202"));
+        QTRY_VERIFY(!qvariant_cast<ModelState>(states.last()[0]).busy);
+        QCOMPARE(qvariant_cast<ModelState>(states.last()[0]).currentId, quint32(2));
+        QCOMPARE(qvariant_cast<ModelState>(states.last()[0]).status, pipelineResultName(PipelineResult::Busy));
+    }
+
+    void modelFailuresAndGui()
+    {
+        using namespace Control;
+        MockControlServer board;
+        QVERIFY(board.listen(QHostAddress::LocalHost, 0));
+        auto settings = settingsFor(board.port());
+        settings.modelSwitchEnabled = true;
+        settings.pingIntervalMs = 40;
+        ApplicationController controller;
+        MainWindow window;
+        window.setModels({{1, "YOLOv8n"}, {2, "YOLO26s"}, {3, "Unavailable"}});
+        connect(&controller, &ApplicationController::controlConnectionChanged, &window, &MainWindow::setControlConnection);
+        connect(&controller, &ApplicationController::boardStateChanged, &window, &MainWindow::setBoardState);
+        connect(&controller, &ApplicationController::modelStateChanged, &window, &MainWindow::setModelState);
+        connect(&window, &MainWindow::modelRequested, &controller, &ApplicationController::requestModel);
+        QSignalSpy pings(&controller, &ApplicationController::commandFinished);
+        auto *combo = window.findChild<QComboBox *>("modelCombo");
+        auto *current = window.findChild<QLabel *>("currentModel");
+        auto *status = window.findChild<QLabel *>("modelStatus");
+        controller.startControl(settings);
+        QTRY_VERIFY(combo->isEnabled());
+        QCOMPARE(combo->count(), 2);
+        QCOMPARE(combo->currentIndex(), -1);
+        QCOMPARE(current->text(), QString("Unknown"));
+        combo->setCurrentIndex(1);
+        QVERIFY(QMetaObject::invokeMethod(combo, "activated", Q_ARG(int, 1)));
+        QVERIFY(!combo->isEnabled());
+        QCOMPARE(current->text(), QString("Unknown"));
+        QTRY_COMPARE(current->text(), QString("YOLO26s"));
+        QVERIFY(combo->isEnabled());
+        QVERIFY(!pings.isEmpty()); // Heartbeats continue while the switch is pending.
+        for (const auto result : {PipelineResult::InvalidId, PipelineResult::Busy, PipelineResult::CreationFailed,
+                 PipelineResult::Restored, PipelineResult::RestoreFailed, PipelineResult::NotReady}) {
+            // Establish a confirmed previous model before each failure.
+            board.setModelResult(PipelineResult::Ok);
+            controller.requestModel(2);
+            QTRY_COMPARE(status->text(), QString("Model changed"));
+            board.setModelResult(result);
+            controller.requestModel(1);
+            QTRY_COMPARE(status->text(), pipelineResultName(result));
+            const bool unknown = result == PipelineResult::RestoreFailed || result == PipelineResult::CreationFailed;
+            QCOMPARE(current->text(), unknown ? QString("Unknown") : QString("YOLO26s"));
+            QVERIFY(combo->isEnabled());
+        }
+        window.show();
+        QTest::qWait(50);
+        window.grab().save(QCoreApplication::applicationDirPath() + "/model-gui.png");
+        controller.stop();
+        QCOMPARE(current->text(), QString("Unknown"));
+        QVERIFY(!combo->isEnabled());
+    }
+
+    void modelTimeoutAndReconnect()
+    {
+        using namespace Control;
+        MockControlServer board;
+        board.setModelDuration(650);
+        QVERIFY(board.listen(QHostAddress::LocalHost, 0));
+        auto settings = settingsFor(board.port());
+        settings.modelSwitchEnabled = true;
+        settings.modelSwitchTimeoutMs = 100;
+        settings.pingIntervalMs = 30;
+        ControlClient client;
+        QSignalSpy states(&client, &ControlClient::modelStateChanged);
+        QSignalSpy commands(&board, &MockControlServer::commandReceived);
+        client.start(settings);
+        QTRY_VERIFY(qvariant_cast<ModelState>(states.last()[0]).countKnown);
+        QVERIFY(client.requestModel(2));
+        QTRY_VERIFY(qvariant_cast<ModelState>(states.last()[0]).status.startsWith("Result unknown"));
+        QVERIFY(!client.requestModel(1));
+        QTRY_COMPARE(qvariant_cast<ModelState>(states.last()[0]).currentId, quint32(2)); // Late completion.
+        QVERIFY(client.requestModel(1));
+        QTRY_COMPARE(qvariant_cast<ModelState>(states.last()[0]).status, QString("Switching model"));
+        client.stop();
+        QCOMPARE(qvariant_cast<ModelState>(states.last()[0]).currentId, quint32(0));
+        client.start(settings);
+        QTRY_VERIFY(qvariant_cast<ModelState>(states.last()[0]).countKnown);
+        QTest::qWait(750); // The old operation completes without a result in this new session.
+        QCOMPARE(qvariant_cast<ModelState>(states.last()[0]).currentId, quint32(0));
+        int changes = 0;
+        for (const auto &args : commands) {
+            const auto message = qvariant_cast<Message>(args[0]);
+            if (message.category == Category::Pipeline && message.command == 3) ++changes;
+        }
+        QCOMPARE(changes, 2); // No automatic retry after timeout or reconnect.
+    }
+
+    void modelYamlValidation()
+    {
+        QTemporaryDir directory;
+        const auto path = directory.filePath("pc.yaml");
+        const auto write = [&path](const QByteArray &models) {
+            QFile file(path);
+            if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+            return file.write("video:\n  codec: h264\nmodels:\n" + models) > 0;
+        };
+        QVERIFY(write("  - id: 1\n    name: YOLOv8n\n  - id: 2\n    name: YOLO26s\n"));
+        const auto config = loadAppConfig(path);
+        QCOMPARE(config.models.size(), 2);
+        QCOMPARE(config.models[1].name, QString("YOLO26s"));
+        QVERIFY(config.control.modelSwitchEnabled);
+        for (const auto &bad : {"  - id: 0\n    name: Bad\n", "  - id: -1\n    name: Bad\n",
+                 "  - id: 4294967296\n    name: Bad\n", "  - id: 1\n    name: '  '\n",
+                 "  - id: 1\n    name: A\n  - id: 1\n    name: B\n", "  id: 1\n"}) {
+            QVERIFY(write(bad));
+            QVERIFY_EXCEPTION_THROWN(loadAppConfig(path), std::runtime_error);
+        }
+    }
+
     void controllerRecordsControlHealth()
     {
         MockControlServer board;

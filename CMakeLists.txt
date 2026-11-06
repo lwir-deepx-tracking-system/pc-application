@@ -38,7 +38,7 @@ if(NOT yaml-cpp_FOUND)
 endif()
 
 add_library(app-config STATIC src/config/AppConfig.cpp src/config/AppConfig.h src/config/ReceiverSettings.h
-    src/config/PerformanceSettings.h src/video/VideoCodec.h)
+    src/config/PerformanceSettings.h src/config/ModelSettings.h src/video/VideoCodec.h)
 target_include_directories(app-config PUBLIC src)
 target_link_libraries(app-config PUBLIC Qt6::Core PRIVATE Qt6::Network yaml-cpp::yaml-cpp)
 

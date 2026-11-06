@@ -23,6 +23,7 @@ public:
     void requestAuto(quint32 trackId);
     void requestManual();
     void requestHome();
+    void requestModel(quint32 id);
     void sendMove(qint8 x, qint8 y);
 
 signals:
@@ -41,12 +42,14 @@ signals:
     void controlError(const QString &message);
     void inputResetRequested();
     void manualInputEnabledChanged(bool enabled);
+    void modelStateChanged(const Control::ModelState &state);
 
 private:
     void fail(const QString &message);
     void stopReception();
     ControlClient control;
     Control::Mode inputMode = Control::Mode::Manual;
+    bool modelWasBusy = false;
     VideoReceiver video;
     MetadataReceiver metadata;
     FrameSynchronizer synchronizer;

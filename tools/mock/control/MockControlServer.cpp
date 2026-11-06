@@ -101,6 +101,42 @@ void MockControlServer::receive()
 void MockControlServer::apply(const Control::Message &message)
 {
     using namespace Control;
+    if (message.category == Category::Pipeline) {
+        const auto command = PipelineCommand(message.command);
+        if (command != PipelineCommand::ModelCount && command != PipelineCommand::ChangeModel) {
+            client->abort(); return;
+        }
+        const auto *data = reinterpret_cast<const uchar *>(message.payload.constData());
+        const auto requestId = qFromBigEndian<quint32>(data);
+        if (command == PipelineCommand::ModelCount) {
+            QByteArray payload(8, '\0');
+            qToBigEndian(requestId, reinterpret_cast<uchar *>(payload.data()));
+            qToBigEndian(quint32(2), reinterpret_cast<uchar *>(payload.data()) + 4);
+            send({Category::Pipeline, quint8(PipelineCommand::ModelCountReply), payload});
+            return;
+        }
+        const auto reply = [this, requestId](PipelinePhase phase, PipelineResult result) {
+            QByteArray payload(6, '\0');
+            qToBigEndian(requestId, reinterpret_cast<uchar *>(payload.data()));
+            payload[4] = char(phase); payload[5] = char(result);
+            send({Category::Pipeline, quint8(PipelineCommand::ModelResult), payload});
+        };
+        const auto id = qFromBigEndian<quint32>(data + 4);
+        if (!id || id > 2 || modelBusy) {
+            reply(PipelinePhase::Completed, modelBusy ? PipelineResult::Busy : PipelineResult::InvalidId);
+            return;
+        }
+        modelBusy = true;
+        publishState({}); // Explicit transport simulation; no model or hardware is loaded.
+        reply(PipelinePhase::Accepted, PipelineResult::Ok);
+        const auto session = client;
+        const auto result = modelResult;
+        QTimer::singleShot(modelDurationMs, this, [this, session, reply, result] {
+            modelBusy = false;
+            if (session && client == session) reply(PipelinePhase::Completed, result);
+        });
+        return;
+    }
     if (message.category == Category::System) {
         if (message.command != quint8(System::Ping)) { client->abort(); return; }
         lastPing = clock.elapsed();

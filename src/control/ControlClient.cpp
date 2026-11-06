@@ -22,6 +22,18 @@ ControlClient::ControlClient(QObject *parent) : QObject(parent)
         for (auto deadline : pending) {
             if (now >= deadline) { emit ackTimedOut(); retry("Control ACK timeout"); return; }
         }
+        if (countPending && now >= countDeadline) {
+            countPending = false;
+            model.status = "Model count unavailable";
+            emit modelStateChanged(model);
+        }
+        if (model.busy && changeDeadline >= 0 && now >= changeDeadline) {
+            changeDeadline = -1;
+            model.currentId = 0;
+            model.status = "Result unknown; awaiting completion or reconnect";
+            // The board may still be switching. Keep the request locked and accept a late result.
+            emit modelStateChanged(model);
+        }
     });
     connect(&socket, &QTcpSocket::connected, this, [this] {
         pending.clear();
@@ -60,6 +72,7 @@ void ControlClient::clearConnection()
     pingSentNs = -1;
     received.clear();
     state = {};
+    resetModels();
     setConnection(Control::Connection::Disconnected);
     socket.abort();
 }
@@ -107,7 +120,7 @@ void ControlClient::retry(const QString &message)
 
 bool ControlClient::canControl() const
 {
-    return connection == Control::Connection::Ready && state.gimbal != Control::GimbalState::Homing
+    return connection == Control::Connection::Ready && !model.busy && state.gimbal != Control::GimbalState::Homing
         && state.gimbal != Control::GimbalState::Error;
 }
 
@@ -157,6 +170,84 @@ bool ControlClient::sendMove(qint8 x, qint8 y)
     return send({Control::Category::Gimbal, quint8(Control::GimbalCommand::Move), payload});
 }
 
+void ControlClient::resetModels()
+{
+    const bool unknown = model.busy;
+    model = {};
+    model.status = unknown ? "Connection lost; change result unknown" : "Current model unknown";
+    countPending = false;
+    modelAccepted = false;
+    countDeadline = changeDeadline = -1;
+    emit modelStateChanged(model);
+}
+
+void ControlClient::queryModelCount()
+{
+    if (!settings.modelSwitchEnabled) return;
+    countRequestId = ++nextRequestId;
+    QByteArray payload(4, '\0');
+    qToBigEndian(countRequestId, reinterpret_cast<uchar *>(payload.data()));
+    if (send({Control::Category::Pipeline, quint8(Control::PipelineCommand::ModelCount), payload})) {
+        countPending = true;
+        countDeadline = clock.elapsed() + settings.ackTimeoutMs;
+        model.status = "Querying models; current model unknown";
+        emit modelStateChanged(model);
+    }
+}
+
+bool ControlClient::requestModel(quint32 id)
+{
+    if (!settings.modelSwitchEnabled || !canControl() || !model.countKnown || !id || id > model.count) return false;
+    changeRequestId = ++nextRequestId;
+    QByteArray payload(8, '\0');
+    auto *data = reinterpret_cast<uchar *>(payload.data());
+    qToBigEndian(changeRequestId, data);
+    qToBigEndian(id, data + 4);
+    if (!send({Control::Category::Pipeline, quint8(Control::PipelineCommand::ChangeModel), payload})) return false;
+    model.requestedId = id;
+    model.busy = true;
+    modelAccepted = false;
+    changeDeadline = clock.elapsed() + settings.modelSwitchTimeoutMs;
+    model.status = "Request sent";
+    emit modelStateChanged(model);
+    return true;
+}
+
+bool ControlClient::receivePipeline(const Control::Message &message)
+{
+    using namespace Control;
+    if (message.command != quint8(PipelineCommand::ModelCountReply)
+        && message.command != quint8(PipelineCommand::ModelResult)) return false;
+    const auto *data = reinterpret_cast<const uchar *>(message.payload.constData());
+    const auto requestId = qFromBigEndian<quint32>(data);
+    if (message.command == quint8(PipelineCommand::ModelCountReply)) {
+        if (!countPending || requestId != countRequestId) return true;
+        countPending = false;
+        model.count = qFromBigEndian<quint32>(data + 4);
+        model.countKnown = true;
+        model.status = model.count ? "Select a model; current model unknown" : "No models available";
+    } else {
+        if (data[4] < 1 || data[4] > 2 || data[5] > quint8(PipelineResult::NotReady)
+            || (data[4] == 1 && data[5] != 0)) return false;
+        if (!model.busy || requestId != changeRequestId) return true;
+        const auto result = PipelineResult(data[5]);
+        if (PipelinePhase(data[4]) == PipelinePhase::Accepted) {
+            modelAccepted = true;
+            model.status = "Switching model";
+        } else {
+            if (result == PipelineResult::Ok && !modelAccepted) return false;
+            model.busy = false;
+            changeDeadline = -1;
+            if (result == PipelineResult::Ok) model.currentId = model.requestedId;
+            else if (result == PipelineResult::RestoreFailed || result == PipelineResult::CreationFailed) model.currentId = 0;
+            model.requestedId = 0;
+            model.status = pipelineResultName(result);
+        }
+    }
+    emit modelStateChanged(model);
+    return true;
+}
+
 void ControlClient::receive()
 {
     if (!active || socket.state() != QAbstractSocket::ConnectedState) return;
@@ -172,10 +263,15 @@ void ControlClient::receive()
             if (socket.bytesAvailable()) continue;
             return;
         }
-        if (result == Control::ParseResult::Invalid || message.category != Control::Category::System) {
+        if (result == Control::ParseResult::Invalid) {
             retry(error.isEmpty() ? "Unexpected board message" : error);
             return;
         }
+        if (message.category == Control::Category::Pipeline) {
+            if (!receivePipeline(message)) { retry("Invalid pipeline response"); return; }
+            continue;
+        }
+        if (message.category != Control::Category::System) { retry("Unexpected board message"); return; }
         if (message.command == quint8(Control::System::Ack)) {
             Control::Ack ack;
             if (!Control::decodeAck(message.payload, ack)) { retry("Invalid ACK payload"); return; }
@@ -187,17 +283,21 @@ void ControlClient::receive()
             }
             emit commandFinished(ack);
         } else if (message.command == quint8(Control::System::Init) || message.command == quint8(Control::System::Status)) {
+            const bool initializeModels = connection != Control::Connection::Ready
+                || message.command == quint8(Control::System::Init);
             Control::BoardState next;
             if (!Control::decodeState(message.payload, next)) { retry("Invalid board state"); return; }
             if (message.command == quint8(Control::System::Init)) {
                 pending.clear();
                 pingSentNs = -1;
+                resetModels();
                 emit resetRequested();
             }
             state = next;
             connectionTimer.stop();
             emit boardStateChanged(state);
             setConnection(Control::Connection::Ready);
+            if (initializeModels) queryModelCount();
         } else {
             retry("Board sent a PC-only command");
             return;

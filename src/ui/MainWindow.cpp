@@ -103,10 +103,28 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     buttons->addWidget(autoButton);
     buttons->addWidget(manualButton);
     targetLayout->addLayout(buttons);
-    auto *hint = new QLabel("Click video: arrow keys move, Space returns home");
-    hint->setWordWrap(true);
-    targetLayout->addWidget(hint);
     panelLayout->addWidget(targetGroup);
+
+    auto *modelGroup = new QGroupBox("MODEL");
+    auto *modelLayout = new QVBoxLayout(modelGroup);
+    currentModelLabel = addValueRow(modelLayout, "Current", "Unknown");
+    currentModelLabel->setObjectName("currentModel");
+    modelCombo = new QComboBox;
+    modelCombo->setObjectName("modelCombo");
+    modelCombo->setPlaceholderText("Select model");
+    modelCombo->setToolTip("Selecting a model requests an immediate switch and clears the tracking target.");
+    modelLayout->addWidget(modelCombo);
+    modelStatusLabel = new QLabel("Not connected");
+    modelStatusLabel->setObjectName("modelStatus");
+    modelStatusLabel->setWordWrap(true);
+    modelLayout->addWidget(modelStatusLabel);
+    panelLayout->addWidget(modelGroup);
+    connect(modelCombo, &QComboBox::activated, this, [this](int index) {
+        if (!modelCombo->isEnabled() || index < 0) return;
+        const auto id = modelCombo->itemData(index).toUInt();
+        if (id != modelState.currentId) emit modelRequested(id);
+        updateModels(); // A rejected local request must not look like an applied model.
+    });
 
     panelLayout->addStretch();
     auto *diagnosticGroup = new QGroupBox("VIDEO");
@@ -217,9 +235,42 @@ bool MainWindow::blocked() const
 
 void MainWindow::updateControlActions()
 {
-    const bool available = controlReady && stateAvailable && !blocked();
+    const bool available = controlReady && stateAvailable && !blocked() && !modelState.busy;
     autoButton->setEnabled(available && enteredTrackId() != 0);
     manualButton->setEnabled(available);
+    updateModels();
+}
+
+void MainWindow::setModels(const ModelOptions &options)
+{
+    models = options;
+    updateModels();
+}
+
+void MainWindow::setModelState(const Control::ModelState &state)
+{
+    modelState = state;
+    updateControlActions();
+}
+
+void MainWindow::updateModels()
+{
+    const QSignalBlocker blocker(modelCombo);
+    modelCombo->clear();
+    for (const auto &option : models) {
+        if (modelState.countKnown && option.id <= modelState.count)
+            modelCombo->addItem(option.name, option.id);
+    }
+    const auto selected = modelState.busy ? modelState.requestedId : modelState.currentId;
+    modelCombo->setCurrentIndex(selected ? modelCombo->findData(selected) : -1);
+    modelCombo->setEnabled(controlReady && stateAvailable && !blocked() && !modelState.busy && modelCombo->count() > 0);
+    QString current = "Unknown";
+    for (const auto &option : models)
+        if (option.id == modelState.currentId) current = option.name;
+    currentModelLabel->setText(current);
+    modelStatusLabel->setText(models.isEmpty() ? "No models configured"
+        : modelState.countKnown && modelState.count && !modelCombo->count()
+            ? "No configured IDs match the board catalog" : modelState.status);
 }
 
 void MainWindow::setControlConnection(Control::Connection connection)

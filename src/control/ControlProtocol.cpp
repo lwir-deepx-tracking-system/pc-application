@@ -20,6 +20,14 @@ int payloadSize(Category category, quint8 command)
         if (command == quint8(GimbalCommand::Move)) return 2;
         if (command == quint8(GimbalCommand::Home)) return 0;
         break;
+    case Category::Pipeline:
+        switch (PipelineCommand(command)) {
+        case PipelineCommand::ModelCount: case PipelineCommand::TrackerCount: return 4;
+        case PipelineCommand::ChangeModel: case PipelineCommand::ChangeTracker:
+        case PipelineCommand::ModelCountReply: case PipelineCommand::TrackerCountReply: return 8;
+        case PipelineCommand::ModelResult: case PipelineCommand::TrackerResult: return 6;
+        }
+        break;
     }
     return -1;
 }
@@ -114,5 +122,19 @@ QString commandName(Category category, quint8 command)
     if (category == Category::Mode) return command == quint8(ModeCommand::Auto) ? "AUTO" : "MANUAL";
     if (category == Category::Gimbal) return command == quint8(GimbalCommand::Move) ? "MOVE" : "HOME";
     return "PING";
+}
+
+QString pipelineResultName(PipelineResult result)
+{
+    switch (result) {
+    case PipelineResult::Ok: return "Model changed";
+    case PipelineResult::InvalidId: return "Invalid model ID";
+    case PipelineResult::Busy: return "Board busy; change rejected";
+    case PipelineResult::CreationFailed: return "Model creation failed";
+    case PipelineResult::Restored: return "Change failed; previous model restored";
+    case PipelineResult::RestoreFailed: return "Model restore failed; no active model";
+    case PipelineResult::NotReady: return "Model service not ready";
+    }
+    return "Unknown model result";
 }
 }

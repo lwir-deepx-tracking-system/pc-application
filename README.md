@@ -69,7 +69,38 @@ YAML을 기본으로 읽고, `--video-port`, `--metadata-port`, `--video-latency
 
 JPEG / H.264 수신 파이프라인 생성은 `src/video/VideoPipeline`에 모았다. 프리뷰 영상은 `src/app/GuiPreview`에서 생성하며 `--gui-preview`로만 사용한다. 이번 구조 변경으로 wire 형식은 바뀌지 않는다.
 
-### TCP 제어 시험
+### 모델 변경
+
+오른쪽 TARGET CONTROL과 VIDEO 사이 MODEL 드롭다운에서 모델을 선택하면 즉시 교체를 요청한다.
+PC YAML의 `models`는 표시 이름과 ID만 관리하며, 실제 모델 파일은 보드의 `model_catalog`가 결정한다.
+
+```yaml
+models:
+  - id: 1
+    name: YOLOv8n
+  - id: 2
+    name: YOLO26s
+```
+
+연결 후 TCP Pipeline(카테고리 4)의 Model count(0x01/0x81)로 개수를 조회하고,
+설정된 ID 중 보드의 `1..count`에 속하는 항목만 표시한다. 이름과 ID 대응은 보드 설정 변경 시 함께 관리한다.
+`models`를 생략하거나 빈 목록으로 두면 조회·교체 요청을 보내지 않으므로 기존 제어 서버와도 사용할 수 있다.
+
+선택 시 Change model(0x03)에 `request_id:u32, model_id:u32`를 Big Endian으로 전송한다.
+Model result(0x83)의 Accepted는 접수이며, Completed/OK를 받아야 현재 모델 표시를 갱신한다.
+기존 System ACK와 별도로 처리하며, 교체 중 드롭다운과 타깃·수동 조작을 잠근다. 영상 수신과 PING은 계속한다.
+runtime의 모델 교체는 기존 추적 타깃을 해제하므로 완료 후 타깃을 다시 선택한다.
+
+보드는 현재 활성 모델 ID를 조회하는 명령을 제공하지 않는다. 최초 접속·재접속의 현재 모델은 Unknown으로 표시하며,
+교체 성공 응답을 받은 경우에만 모델 이름을 확정한다. 실패 시 이전 모델 복구 성공과 복구 실패를 구분한다.
+`control.model_switch_timeout_ms`(기본 30000, 범위 1..60000)가 지나면 결과 미확인으로 표시하고
+늦은 완료 응답을 계속 기다린다. 타임아웃·재접속 시 교체를 자동 재전송하지 않는다.
+연결이 유지되는 동안에는 완료 응답이 올 때까지 조작 잠금을 유지한다.
+모델 클래스 이름과 순서는 공통 `class_names.txt`를 사용하므로 등록 모델 간 동일하게 맞춰야 한다.
+
+Mock 제어 서버는 모델 ID 1, 2와 200ms의 교체 응답을 시뮬레이션한다. 실제 모델 로드·추론 검증은 아니다.
+
+### TCP 제어 시험 절차
 
 현재 PC는 TCP 제어를 구현했으며, 실제 runtime 송신부·제어부는 별도 수정과 검증이 필요하다. 기본 YAML의 `control.host`는 로컬 Mock용 `127.0.0.1`, 포트는 `5002`다. 실제 짐벌에는 접근하지 않는다.
 
