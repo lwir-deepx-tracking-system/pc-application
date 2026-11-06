@@ -7,23 +7,32 @@
 #include <QTimer>
 #include <map>
 #include "VideoTrace.h"
+#include "VideoCodec.h"
 #include <gst/gst.h>
 
 class VideoReceiver : public QObject
 {
     Q_OBJECT
 public:
+    using Codec = VideoCodec;
     explicit VideoReceiver(QObject *parent = nullptr);
     ~VideoReceiver() override;
     bool start(quint16 port = 5000, const QString &tracePath = {}, uint latencyMs = 50,
-               const QString &packetTracePath = {});
+               const QString &packetTracePath = {}, Codec codec = Codec::JPEG,
+               const QString &bindAddress = "0.0.0.0");
     void stop();
     void recordPaint(quint64 frameId, qint64 monotonicNs);
+    void resetMeasurementTimes();
 
 signals:
     void frameReady(const QImage &image, quint64 ptsNs, qint64 rtpTimestamp, quint64 frameId);
     void fpsChanged(double fps);
+    // Depayloader's complete-frame arrival to owned QImage, including poll wait.
+    void processingTimeChanged(double milliseconds);
+    void streamRestarted();
     void errorOccurred(const QString &message);
+    void frameObserved(quint64 deliveryId, qint64 firstRtpNs);
+    void rtpBytesReceived(quint64 bytes);
 
 private:
     static GstPadProbeReturn inspectRtp(GstPad *pad, GstPadProbeInfo *info, gpointer data);
@@ -36,8 +45,14 @@ private:
     QTimer timer;
     QElapsedTimer fpsClock;
     quint64 fpsFrames = 0;
+    qint64 processingNs = 0;
+    quint64 processingFrames = 0;
+    qint64 streamSsrc = -1;
     quint64 deliveryId = 0; // Never reset across receiver restarts.
     VideoTrace trace;
     QMutex timestampMutex;
-    std::map<quint64, std::pair<quint32, quint32>> timestamps; // PTS -> SSRC, RTP timestamp
+    struct FrameTiming { quint32 ssrc; quint32 rtp; qint64 receivedNs; qint64 firstRtpNs; };
+    std::map<quint64, FrameTiming> timestamps;
+    std::map<std::pair<quint32, quint32>, qint64> firstPackets;
+    quint64 incomingBytes = 0;
 };

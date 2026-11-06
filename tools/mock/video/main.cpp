@@ -5,6 +5,8 @@
 #include <QTimer>
 #include <QElapsedTimer>
 #include <QDebug>
+#include <QDataStream>
+#include <QUdpSocket>
 #include <gst/app/gstappsrc.h>
 #include <gst/rtp/gstrtpbuffer.h>
 #include "video/VideoTrace.h"
@@ -46,6 +48,8 @@ int main(int argc, char **argv)
     parser.addHelpOption();
     parser.addOption({"host", "Destination IP.", "address", "127.0.0.1"});
     parser.addOption({"port", "Destination UDP port.", "port", "5000"});
+    parser.addOption({"codec", "Codec: jpeg or h264 (software test sender).", "codec", "jpeg"});
+    parser.addOption({"metadata-port", "Send synthetic LWIR tracking metadata to this UDP port; 0 disables.", "port", "0"});
     parser.addOption({"frames", "Number of frames; 0 sends until interrupted.", "count", "0"});
     parser.addOption({"trace", "Frame summary CSV output.", "path"});
     parser.addOption({"packet-trace", "Optional RTP packet CSV output.", "path"});
@@ -54,7 +58,11 @@ int main(int argc, char **argv)
     bool countOk = false;
     const uint port = parser.value("port").toUInt(&portOk);
     const uint frameLimit = parser.value("frames").toUInt(&countOk);
-    if (!portOk || !port || port > 65535 || !countOk)
+    const QString codec = parser.value("codec");
+    bool metadataOk = false;
+    const uint metadataPort = parser.value("metadata-port").toUInt(&metadataOk);
+    if (!portOk || !port || port > 65535 || !countOk || !metadataOk || metadataPort > 65535
+        || metadataPort == port || (codec != "jpeg" && codec != "h264"))
         parser.showHelp(1);
     configureGStreamerRuntime();
     GError *error = nullptr;
@@ -68,12 +76,16 @@ int main(int argc, char **argv)
         qCritical() << "Cannot open trace file";
         return 1;
     }
-    GstElement *pipeline = gst_parse_launch(
+    const QString encoderPath = codec == "jpeg"
+        ? "jpegenc quality=80 ! jpegparse ! rtpjpegpay name=pay pt=26"
+        : "x264enc tune=zerolatency speed-preset=ultrafast bitrate=3000 key-int-max=30 bframes=0 byte-stream=true "
+          "! h264parse ! rtph264pay name=pay pt=96 config-interval=-1";
+    const QString description = QString(
         "appsrc name=source is-live=true format=time block=false "
         "caps=\"video/x-raw,format=RGB,width=640,height=480,framerate=30/1\" "
-        "! videoconvert ! video/x-raw,format=I420 ! jpegenc quality=80 ! jpegparse "
-        "! rtpjpegpay name=pay pt=26 mtu=1200 timestamp-offset=0 seqnum-offset=0 "
-        "! udpsink name=output sync=true async=false", &error);
+        "! videoconvert ! video/x-raw,format=I420 ! %1 mtu=1200 timestamp-offset=0 seqnum-offset=0 "
+        "! udpsink name=output sync=true async=false").arg(encoderPath);
+    GstElement *pipeline = gst_parse_launch(description.toUtf8().constData(), &error);
     if (error || !pipeline) {
         qCritical() << (error ? error->message : "Cannot create sender");
         g_clear_error(&error);
@@ -97,6 +109,7 @@ int main(int argc, char **argv)
     bool ending = false;
     QElapsedTimer clock;
     QTimer timer;
+    QUdpSocket metadataSocket;
     timer.setInterval(2);
     timer.setTimerType(Qt::PreciseTimer);
     QObject::connect(&timer, &QTimer::timeout, &app, [&] {
@@ -115,7 +128,8 @@ int main(int argc, char **argv)
             app.quit();
             return;
         }
-        const quint64 pts = gst_util_uint64_scale(frameIndex, GST_SECOND, 30);
+        const quint64 ticks = gst_util_uint64_scale(frameIndex, 90000, 30);
+        const quint64 pts = gst_util_uint64_scale_ceil(ticks, GST_SECOND, 90000);
         if (ending || quint64(clock.nsecsElapsed()) < pts)
             return;
         QImage image(640, 480, QImage::Format_RGB888);
@@ -136,10 +150,26 @@ int main(int argc, char **argv)
             painter.drawText(QRect(20, 20, 600, 60), QString("MOCK VIDEO  |  Frame %1").arg(frameIndex + 1));
         }
         const qint64 acquiredNs = VideoTrace::nowNs();
+        if (metadataPort) {
+            // Explicit mock annotations only; these are not inference results.
+            QByteArray packet;
+            QDataStream stream(&packet, QIODevice::WriteOnly);
+            stream.setByteOrder(QDataStream::BigEndian);
+            stream.setFloatingPointPrecision(QDataStream::SinglePrecision);
+            stream << quint32(0x4c574952) << quint64(frameIndex + 1)
+                   << quint32(ticks) << quint64(0) << quint32(1)
+                   << quint32(7) << float((frameIndex * 4) % 560)
+                   << float(200) << float(80) << float(80) << quint8(0) << float(0.95);
+            if (metadataSocket.writeDatagram(packet, QHostAddress(parser.value("host")), quint16(metadataPort)) != packet.size()) {
+                exitCode = 1;
+                app.quit();
+                return;
+            }
+        }
         GstBuffer *buffer = gst_buffer_new_allocate(nullptr, image.sizeInBytes(), nullptr);
         gst_buffer_fill(buffer, 0, image.constBits(), image.sizeInBytes());
         GST_BUFFER_PTS(buffer) = pts;
-        GST_BUFFER_DURATION(buffer) = gst_util_uint64_scale(frameIndex + 1, GST_SECOND, 30) - pts;
+        GST_BUFFER_DURATION(buffer) = gst_util_uint64_scale_ceil((frameIndex + 1) * 3000, GST_SECOND, 90000) - pts;
         trace.record("appsrc", frameIndex + 1, pts, -1, -1, -1, false, acquiredNs);
         if (gst_app_src_push_buffer(GST_APP_SRC(source), buffer) != GST_FLOW_OK) {
             exitCode = 1;
@@ -157,7 +187,7 @@ int main(int argc, char **argv)
     } else {
         clock.start();
         timer.start();
-        qInfo() << "Sending RTP/JPEG to" << host << port;
+        qInfo() << "Sending RTP" << codec << "to" << host << port;
         app.exec();
     }
     timer.stop();

@@ -1,15 +1,14 @@
 #include "MainWindow.h"
 
 #include <QComboBox>
-#include <QDebug>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
-#include <QPainter>
 #include <QPushButton>
 #include <QRegularExpressionValidator>
 #include <QSignalBlocker>
+#include <QStatusBar>
 #include <QVBoxLayout>
 #include <limits>
 
@@ -27,35 +26,9 @@ QLabel *addValueRow(QVBoxLayout *layout, const QString &name, const QString &val
     layout->addLayout(row);
     return valueLabel;
 }
-
-QImage makeDummyImage()
-{
-    QImage image(640, 480, QImage::Format_RGB32);
-    QPainter painter(&image);
-    QLinearGradient gradient(0, 0, 0, 480);
-    gradient.setColorAt(0, QColor(28, 28, 28));
-    gradient.setColorAt(1, QColor(87, 87, 87));
-    painter.fillRect(image.rect(), gradient);
-    painter.setPen(QColor(99, 99, 99));
-    for (int y = 300; y < 480; y += 30)
-        painter.drawLine(0, y, 640, y);
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(Qt::NoPen);
-    for (const QPoint &position : {QPoint(120, 160), QPoint(315, 205), QPoint(510, 135)}) {
-        painter.setBrush(QColor(194, 194, 194));
-        painter.drawEllipse(QRectF(position.x() - 13, position.y(), 26, 26));
-        painter.drawRoundedRect(QRectF(position.x() - 20, position.y() + 30, 40, 70), 12, 12);
-        painter.setBrush(QColor(155, 155, 155));
-        painter.drawRoundedRect(QRectF(position.x() - 18, position.y() + 96, 14, 45), 5, 5);
-        painter.drawRoundedRect(QRectF(position.x() + 4, position.y() + 96, 14, 45), 5, 5);
-    }
-    painter.setPen(QColor(190, 190, 190));
-    painter.drawText(QRect(16, 14, 300, 24), "DUMMY FRAME  /  640 x 480");
-    return image;
-}
 }
 
-MainWindow::MainWindow(QWidget *parent, bool dummyPreview) : QMainWindow(parent)
+MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
     setWindowTitle("LWIR Target Tracking System");
     resize(1280, 720);
@@ -76,9 +49,9 @@ MainWindow::MainWindow(QWidget *parent, bool dummyPreview) : QMainWindow(parent)
         QPushButton:hover { background: #354961; }
         QPushButton:pressed { background: #182638; }
         QPushButton:disabled { color: #6c7787; background: #18202c; }
-        QPushButton#trackButton { background: #245e51; border-color: #398975; }
-        QPushButton#trackButton:hover { background: #307765; }
-        QPushButton#trackButton:disabled { background: #182c28; color: #6c7787; }
+        QPushButton#autoButton { background: #245e51; border-color: #398975; }
+        QPushButton#autoButton:hover { background: #307765; }
+        QPushButton#autoButton:disabled { background: #182c28; color: #6c7787; }
     )");
     auto *central = new QWidget;
     central->setObjectName("central");
@@ -93,14 +66,20 @@ MainWindow::MainWindow(QWidget *parent, bool dummyPreview) : QMainWindow(parent)
     panel->setFixedWidth(280);
     auto *panelLayout = new QVBoxLayout(panel);
     panelLayout->setContentsMargins(0, 0, 0, 0);
-    panelLayout->setSpacing(18);
+    panelLayout->setSpacing(10);
     layout->addWidget(panel);
 
     auto *statusGroup = new QGroupBox("SYSTEM STATUS");
     auto *statusLayout = new QVBoxLayout(statusGroup);
-    statusLayout->setSpacing(18);
-    addValueRow(statusLayout, "Orange Pi", QString::fromUtf8("\xe2\x97\x8f Offline"));
-    addValueRow(statusLayout, "Gimbal", QString::fromUtf8("\xe2\x97\x8f Unknown"));
+    statusLayout->setSpacing(8);
+    connectionLabel = addValueRow(statusLayout, "Control", "Disconnected");
+    connectionLabel->setObjectName("controlConnection");
+    modeLabel = addValueRow(statusLayout, "Mode", "--");
+    modeLabel->setObjectName("controlMode");
+    targetLabel = addValueRow(statusLayout, "Target", "--");
+    gimbalLabel = addValueRow(statusLayout, "Gimbal", "--");
+    gimbalLabel->setObjectName("gimbalState");
+    errorLabel = addValueRow(statusLayout, "Error", "--");
     panelLayout->addWidget(statusGroup);
 
     auto *targetGroup = new QGroupBox("TARGET CONTROL");
@@ -117,42 +96,61 @@ MainWindow::MainWindow(QWidget *parent, bool dummyPreview) : QMainWindow(parent)
     trackCombo->setToolTip("Track ID: 1 - 4294967295");
     targetLayout->addWidget(trackCombo);
     auto *buttons = new QHBoxLayout;
-    trackButton = new QPushButton("Track");
-    trackButton->setObjectName("trackButton");
-    auto *clearButton = new QPushButton("Clear");
-    clearButton->setObjectName("clearButton");
-    buttons->addWidget(trackButton);
-    buttons->addWidget(clearButton);
+    autoButton = new QPushButton("AUTO");
+    autoButton->setObjectName("autoButton");
+    manualButton = new QPushButton("MANUAL");
+    manualButton->setObjectName("manualButton");
+    buttons->addWidget(autoButton);
+    buttons->addWidget(manualButton);
     targetLayout->addLayout(buttons);
     panelLayout->addWidget(targetGroup);
 
+    auto *modelGroup = new QGroupBox("MODEL");
+    auto *modelLayout = new QVBoxLayout(modelGroup);
+    currentModelLabel = addValueRow(modelLayout, "Current", "Unknown");
+    currentModelLabel->setObjectName("currentModel");
+    modelCombo = new QComboBox;
+    modelCombo->setObjectName("modelCombo");
+    modelCombo->setPlaceholderText("Select model");
+    modelCombo->setToolTip("Selecting a model requests an immediate switch and clears the tracking target.");
+    modelLayout->addWidget(modelCombo);
+    modelStatusLabel = new QLabel("Not connected");
+    modelStatusLabel->setObjectName("modelStatus");
+    modelStatusLabel->setWordWrap(true);
+    modelLayout->addWidget(modelStatusLabel);
+    panelLayout->addWidget(modelGroup);
+    connect(modelCombo, &QComboBox::activated, this, [this](int index) {
+        if (!modelCombo->isEnabled() || index < 0) return;
+        const auto id = modelCombo->itemData(index).toUInt();
+        if (id != modelState.currentId) emit modelRequested(id);
+        updateModels(); // A rejected local request must not look like an applied model.
+    });
+
     panelLayout->addStretch();
-    auto *diagnosticGroup = new QGroupBox("DIAGNOSTICS");
+    auto *diagnosticGroup = new QGroupBox("VIDEO");
     auto *diagnosticLayout = new QVBoxLayout(diagnosticGroup);
-    diagnosticLayout->setSpacing(14);
-    videoFpsLabel = addValueRow(diagnosticLayout, "Video FPS", "--");
+    diagnosticLayout->setSpacing(8);
+    videoCodecLabel = addValueRow(diagnosticLayout, "Video codec", "--");
+    videoCodecLabel->setObjectName("videoCodec");
+    videoFpsLabel = addValueRow(diagnosticLayout, "Display FPS", "--");
     videoFpsLabel->setObjectName("videoFps");
-    for (const auto &name : {"Metadata FPS", "Metadata Loss", "Video Missing",
-                             "Sync Miss", "Detection", "Track Count"})
-        addValueRow(diagnosticLayout, name, "--");
+    videoLatencyLabel = addValueRow(diagnosticLayout, "PC receive to paint", "--");
+    videoLatencyLabel->setObjectName("videoLatencyMs");
+    videoLatencyLabel->setToolTip("Current interval average ms: first RTP observed on this PC to GUI paint. Excludes board encoding and network transit to this PC; not physical monitor output.");
     panelLayout->addWidget(diagnosticGroup);
 
     connect(trackCombo, &QComboBox::editTextChanged, this, [this] {
-        trackButton->setEnabled(enteredTrackId() != 0);
+        updateControlActions();
     });
-    connect(trackButton, &QPushButton::clicked, this, [this] {
-        requestTargetSet(enteredTrackId());
+    connect(autoButton, &QPushButton::clicked, this, [this] {
+        requestAuto(enteredTrackId());
     });
-    connect(clearButton, &QPushButton::clicked, this, &MainWindow::requestTargetClear);
-    connect(videoWidget, &VideoWidget::targetSetRequested, this, &MainWindow::requestTargetSet);
-    connect(videoWidget, &VideoWidget::targetClearRequested, this, &MainWindow::requestTargetClear);
+    connect(manualButton, &QPushButton::clicked, this, &MainWindow::requestManual);
+    connect(videoWidget, &VideoWidget::autoRequested, this, &MainWindow::requestAuto);
+    connect(videoWidget, &VideoWidget::manualRequested, this, &MainWindow::requestManual);
     connect(videoWidget, &VideoWidget::framePainted, this, &MainWindow::framePainted);
 
-    if (dummyPreview)
-        setDisplayFrame(makeDummyImage(), {{3, QRectF(82, 150, 76, 162)},
-                                         {15, QRectF(277, 195, 76, 162)},
-                                         {22, QRectF(472, 125, 76, 162)}});
-    trackButton->setEnabled(enteredTrackId() != 0);
+    updateControlActions();
 }
 
 void MainWindow::setVideoFps(double fps)
@@ -160,22 +158,43 @@ void MainWindow::setVideoFps(double fps)
     videoFpsLabel->setText(QString::number(fps, 'f', 1));
 }
 
+void MainWindow::setVideoLatency(double milliseconds)
+{
+    videoLatencyLabel->setText(milliseconds >= 0 ? QString::number(milliseconds, 'f', 2) + " ms" : "--");
+}
+
+void MainWindow::setVideoCodec(VideoCodec codec)
+{
+    videoCodecLabel->setText(codec == VideoCodec::JPEG ? "JPEG" : "H.264");
+}
+
+void MainWindow::setClassLabels(const ClassLabels &labels)
+{
+    videoWidget->setClassLabels(labels);
+}
+
 void MainWindow::setDisplayFrame(const QImage &image, const QVector<TrackBox> &tracks, quint64 frameId)
 {
     videoWidget->setDisplayFrame(image, tracks, frameId);
+    QSet<quint32> nextIds;
+    QStringList items;
+    if (!image.isNull()) {
+        for (const auto &track : tracks) {
+            if (track.trackId && !nextIds.contains(track.trackId)) {
+                nextIds.insert(track.trackId);
+                items.push_back(QString::number(track.trackId));
+            }
+        }
+    }
+    if (nextIds == availableTrackIds) return;
+    availableTrackIds = std::move(nextIds);
     const QString typedId = trackCombo->currentText();
     const QSignalBlocker blocker(trackCombo);
     trackCombo->clear();
-    if (!image.isNull()) {
-        for (const auto &track : tracks) {
-            const QString id = QString::number(track.trackId);
-            if (track.trackId != 0 && trackCombo->findText(id) == -1)
-                trackCombo->addItem(id);
-        }
-    }
+    trackCombo->addItems(items);
     trackCombo->setCurrentIndex(-1);
     trackCombo->setEditText(typedId);
-    trackButton->setEnabled(enteredTrackId() != 0);
+    updateControlActions();
 }
 
 quint32 MainWindow::enteredTrackId() const
@@ -189,16 +208,125 @@ quint32 MainWindow::enteredTrackId() const
         ? static_cast<quint32>(id) : 0;
 }
 
-void MainWindow::requestTargetSet(quint32 trackId)
+void MainWindow::requestAuto(quint32 trackId)
 {
-    if (trackId == 0)
-        return;
-    qInfo().noquote() << QString("TARGET_SET(%1) [GUI mock]").arg(trackId);
-    emit targetSetRequested(trackId);
+    if (!trackId || !controlReady || !stateAvailable || blocked()) return;
+    emit autoRequested(trackId);
 }
 
-void MainWindow::requestTargetClear()
+void MainWindow::requestManual()
 {
-    qInfo() << "TARGET_CLEAR [GUI mock]";
-    emit targetClearRequested();
+    if (controlReady && stateAvailable && !blocked()) emit manualRequested();
+}
+
+void MainWindow::resetReception()
+{
+    setDisplayFrame({}, {});
+    videoFpsLabel->setText("--");
+    videoLatencyLabel->setText("--");
+}
+
+QWidget *MainWindow::manualInputSurface() const { return videoWidget; }
+
+bool MainWindow::blocked() const
+{
+    return board.gimbal == Control::GimbalState::Homing || board.gimbal == Control::GimbalState::Error;
+}
+
+void MainWindow::updateControlActions()
+{
+    const bool available = controlReady && stateAvailable && !blocked() && !modelState.busy;
+    autoButton->setEnabled(available && enteredTrackId() != 0);
+    manualButton->setEnabled(available);
+    updateModels();
+}
+
+void MainWindow::setModels(const ModelOptions &options)
+{
+    models = options;
+    updateModels();
+}
+
+void MainWindow::setModelState(const Control::ModelState &state)
+{
+    modelState = state;
+    updateControlActions();
+}
+
+void MainWindow::updateModels()
+{
+    const QSignalBlocker blocker(modelCombo);
+    modelCombo->clear();
+    for (const auto &option : models) {
+        if (modelState.countKnown && option.id <= modelState.count)
+            modelCombo->addItem(option.name, option.id);
+    }
+    const auto selected = modelState.busy ? modelState.requestedId : modelState.currentId;
+    modelCombo->setCurrentIndex(selected ? modelCombo->findData(selected) : -1);
+    modelCombo->setEnabled(controlReady && stateAvailable && !blocked() && !modelState.busy && modelCombo->count() > 0);
+    QString current = "Unknown";
+    for (const auto &option : models)
+        if (option.id == modelState.currentId) current = option.name;
+    currentModelLabel->setText(current);
+    modelStatusLabel->setText(models.isEmpty() ? "No models configured"
+        : modelState.countKnown && modelState.count && !modelCombo->count()
+            ? "No configured IDs match the board catalog" : modelState.status);
+}
+
+void MainWindow::setControlConnection(Control::Connection connection)
+{
+    controlReady = connection == Control::Connection::Ready;
+    switch (connection) {
+    case Control::Connection::Disconnected: connectionLabel->setText("Disconnected"); break;
+    case Control::Connection::Connecting: connectionLabel->setText("Connecting"); break;
+    case Control::Connection::AwaitingState: connectionLabel->setText("Waiting for state"); break;
+    case Control::Connection::Ready: connectionLabel->setText("Connected"); break;
+    }
+    if (!controlReady) {
+        stateAvailable = false;
+        modeLabel->setText("--");
+        targetLabel->setText("--");
+        gimbalLabel->setText("--");
+        errorLabel->setText("--");
+    }
+    updateControlActions();
+}
+
+void MainWindow::setBoardState(const Control::BoardState &state)
+{
+    board = state;
+    stateAvailable = true;
+    modeLabel->setText(state.mode == Control::Mode::Auto ? "AUTO" : "MANUAL");
+    const char *target = state.target == Control::TargetState::Tracking ? "TRACKING" : "LOST";
+    targetLabel->setText(state.selectedTargetId ? QString("%1 / %2").arg(state.selectedTargetId).arg(target) : "None");
+    switch (state.gimbal) {
+    case Control::GimbalState::Idle: gimbalLabel->setText("IDLE"); break;
+    case Control::GimbalState::ManualMoving: gimbalLabel->setText("MANUAL MOVING"); break;
+    case Control::GimbalState::AutoTracking: gimbalLabel->setText("AUTO TRACKING"); break;
+    case Control::GimbalState::Homing: gimbalLabel->setText("HOMING"); break;
+    case Control::GimbalState::Hold: gimbalLabel->setText("HOLD"); break;
+    case Control::GimbalState::Error: gimbalLabel->setText("ERROR"); break;
+    }
+    errorLabel->setText(state.errorCode ? QString::number(state.errorCode) : "None");
+    updateControlActions();
+}
+
+void MainWindow::showCommandResult(const Control::Ack &ack)
+{
+    if (ack.category == Control::Category::System) return;
+    statusBar()->showMessage(Control::commandName(ack.category, ack.command) + ": " + Control::resultName(ack.result), 5000);
+}
+
+void MainWindow::showControlError(const QString &message) { statusBar()->showMessage(message, 5000); }
+
+void MainWindow::showRecordingError(const QString &message)
+{
+    auto *label = statusBar()->findChild<QLabel *>("recordingError");
+    if (!label) {
+        label = new QLabel(statusBar());
+        label->setObjectName("recordingError");
+        statusBar()->addPermanentWidget(label);
+    }
+    label->setText("Recording incomplete");
+    label->setToolTip(message);
 }

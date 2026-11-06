@@ -15,18 +15,31 @@ void VideoWidget::setDisplayFrame(const QImage &newImage, const QVector<TrackBox
                                   quint64 frameId)
 {
     // Replace image and overlays together so old boxes cannot survive a new frame.
-    image = newImage.copy();
+    image = newImage; // The receiver already owns the pixels; QImage shares them safely.
     tracks = newImage.isNull() ? QVector<TrackBox>{} : newTracks;
-    pendingFrameId = newImage.isNull() ? 0 : frameId;
+    if (newImage.isNull()) {
+        pendingFrameId = 0;
+        lastFrameId = 0;
+    } else if (frameId != lastFrameId) {
+        pendingFrameId = frameId;
+        lastFrameId = frameId;
+    }
     update();
 }
 
 QRectF VideoWidget::videoRect() const
 {
-    const qreal scale = qMin(width() / 640.0, height() / 480.0);
-    const QSizeF size(640.0 * scale, 480.0 * scale);
+    const QSize source = image.isNull() ? QSize(640, 480) : image.size();
+    const qreal scale = qMin(qreal(width()) / source.width(), qreal(height()) / source.height());
+    const QSizeF size(source.width() * scale, source.height() * scale);
     return QRectF(QPointF((width() - size.width()) / 2.0,
                          (height() - size.height()) / 2.0), size);
+}
+
+void VideoWidget::setClassLabels(const ClassLabels &labels)
+{
+    classLabels = labels;
+    update();
 }
 
 void VideoWidget::paintEvent(QPaintEvent *)
@@ -43,7 +56,7 @@ void VideoWidget::paintEvent(QPaintEvent *)
     painter.save();
     painter.setClipRect(fitted);
     painter.translate(fitted.topLeft());
-    const qreal scale = fitted.width() / 640.0;
+    const qreal scale = fitted.width() / image.width();
     painter.scale(scale, scale);
     QPen pen(QColor("#64e5c0"), 2.0);
     pen.setCosmetic(true);
@@ -54,11 +67,21 @@ void VideoWidget::paintEvent(QPaintEvent *)
     painter.setFont(labelFont);
     for (const auto &track : tracks) {
         painter.drawRect(track.bbox);
-        const QString label = QString("ID %1").arg(track.trackId);
-        const qreal labelWidth = painter.fontMetrics().horizontalAdvance(label) + 12;
-        const QRectF labelRect(track.bbox.x(), qMax(0.0, track.bbox.y() - 23.0), labelWidth, 23);
+        const QString idLabel = QString("ID %1").arg(track.trackId);
+        const QString classLabel = classLabels.label(track.classId);
+        const auto metrics = painter.fontMetrics();
+        const qreal rowHeight = metrics.height() + 4;
+        const qreal labelWidth = qMin(qreal(image.width()),
+            qreal(qMax(metrics.horizontalAdvance(idLabel), metrics.horizontalAdvance(classLabel)) + 12));
+        const qreal labelHeight = rowHeight * 2;
+        const qreal x = qBound(0.0, track.bbox.x(), qMax(0.0, image.width() - labelWidth));
+        const qreal preferredY = track.bbox.y() >= labelHeight ? track.bbox.y() - labelHeight : track.bbox.y();
+        const qreal y = qBound(0.0, preferredY, qMax(0.0, image.height() - labelHeight));
+        const QRectF labelRect(x, y, labelWidth, labelHeight);
         painter.fillRect(labelRect, QColor("#102c29"));
-        painter.drawText(labelRect.adjusted(6, 0, -6, 0), Qt::AlignVCenter, label);
+        painter.drawText(QRectF(x + 6, y, labelWidth - 12, rowHeight), Qt::AlignVCenter, idLabel);
+        painter.drawText(QRectF(x + 6, y + rowHeight, labelWidth - 12, rowHeight), Qt::AlignVCenter,
+            metrics.elidedText(classLabel, Qt::ElideRight, int(labelWidth - 12)));
     }
     painter.restore();
     painter.end();
@@ -73,6 +96,7 @@ void VideoWidget::paintEvent(QPaintEvent *)
 
 void VideoWidget::mousePressEvent(QMouseEvent *event)
 {
+    if (event->button() == Qt::LeftButton) setFocus(Qt::MouseFocusReason);
     if (event->button() != Qt::LeftButton || image.isNull()) {
         QWidget::mousePressEvent(event);
         return;
@@ -80,7 +104,7 @@ void VideoWidget::mousePressEvent(QMouseEvent *event)
     const QRectF fitted = videoRect();
     if (!fitted.contains(event->position()))
         return;
-    const QPointF original = (event->position() - fitted.topLeft()) / (fitted.width() / 640.0);
+    const QPointF original = (event->position() - fitted.topLeft()) / (fitted.width() / image.width());
     quint32 hitId = 0;
     int hitCount = 0;
     for (const auto &track : tracks) {
@@ -90,8 +114,8 @@ void VideoWidget::mousePressEvent(QMouseEvent *event)
         }
     }
     if (hitCount == 1)
-        emit targetSetRequested(hitId);
+        emit autoRequested(hitId);
     else if (hitCount == 0)
-        emit targetClearRequested();
+        emit manualRequested();
     // Multiple hits stay unresolved until the overlap selection policy is approved.
 }

@@ -1,0 +1,29 @@
+video:
+  codec: h264  # h264 or jpeg; must match the board sender.
+  bind_address: 0.0.0.0  # Local PC address; 0.0.0.0 receives on all IPv4 interfaces.
+  port: 5000
+  latency_ms: 50
+
+metadata:
+  bind_address: 0.0.0.0
+  port: 5001
+
+control:
+  enabled: true
+  host: 192.168.50.2
+  ping_interval_ms: 500
+  ack_timeout_ms: 1500
+  connect_timeout_ms: 2000
+  reconnect_interval_ms: 1000
+  model_switch_timeout_ms: 30000
+
+# Display names only. IDs must match the board's model_catalog (1..count).
+models:
+  - id: 1
+    name: YOLOv8n
+  - id: 2
+    name: YOLO26s
+
+performance:
+  enabled: true
+  output_dir: logs  # Relative to this YAML file; one timestamp-named CSV per run.

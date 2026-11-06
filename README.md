@@ -13,14 +13,24 @@
 - CMake 3.25 이상, C++20
 - Qt 6 Widgets/Network (Windows: MSVC x64 Kit)
 - GStreamer 1.22 이상 Runtime + Development (Windows: MSVC x64)
-- 현재 검증 환경: Qt 6.11.2, GStreamer 1.28.7, MSVC
+- yaml-cpp 0.8 이상. 설치된 패키지가 없으면 CMake가 0.8.0의 고정 커밋을 받아 정적으로 빌드한다. 최초 구성에는 인터넷 연결이 필요하다.
+- 현재 검증 환경: Qt 6.11.3, GStreamer 1.28.8.1, MSVC (Visual Studio 2026)
 
 [GStreamer 공식 다운로드](https://gstreamer.freedesktop.org/download/)에서 Windows MSVC x86_64의 Runtime and development headers를 설치한다. CMake는 기본 사용자/시스템 설치 경로를 검색한다. 다른 경로라면 `-DGSTREAMER_ROOT=C:/path/to/gstreamer`를 지정한다.
 
-VS Code의 CMake Tools에서 Configure와 Debug Build를 실행한다. 현재 `.vscode/settings.json`의 Qt Kit 설정을 사용한다. 명령행에서는 CMake 실행 파일이 PATH에 있어야 한다.
+**빌드 전에 Windows 사용자 환경변수 `QT_ROOT`를 등록한다.** 값은 Qt 설치 루트나 `bin` 폴더가 아니라 설치한 MSVC Kit 폴더까지 지정한다. 기본 위치에 Qt 6.11.3을 설치한 예시는 다음과 같다.
+
+```text
+변수 이름: QT_ROOT
+변수 값: C:\Qt\6.11.3\msvc2022_64
+```
+
+Windows의 **시스템 환경 변수 편집 → 환경 변수 → 사용자 변수 → 새로 만들기**에서 등록한다. 실제 설치 위치가 다르면 그 경로를 사용한다. 등록·변경 후 VS Code를 완전히 종료했다가 다시 연다. 기존 빌드 캐시가 있으면 명령 팔레트에서 **CMake: Delete Cache and Reconfigure**를 실행한다.
+
+`.vscode/settings.json`의 CMake 구성과 `.vscode/launch.json`의 디버그 실행 경로는 모두 `QT_ROOT`를 참조한다. VS Code의 CMake Tools에서 Configure와 Debug Build를 실행한다. PowerShell 명령행에서는 CMake 실행 파일이 PATH에 있어야 하며, Qt 경로를 다음과 같이 전달한다.
 
 ```powershell
-cmake -S . -B build -DCMAKE_PREFIX_PATH=C:/Qt/6.11.2/msvc2022_64
+cmake -S . -B build "-DCMAKE_PREFIX_PATH=$env:QT_ROOT"
 cmake --build build --config Debug
 ```
 
@@ -28,7 +38,160 @@ Windows 빌드 시 Qt/GStreamer DLL, 플러그인, Plugin Scanner가 실행 파�
 
 ## 영상 수신
 
-기본 수신 포트는 RTP/JPEG UDP 5000이다. 송신기가 없으면 `No video`가 표시된다.
+영상 수신 포트는 기본 UDP 5000이다. 송신기가 없으면 `No video`가 표시된다.
+
+코덱은 `config/pc-application.yaml`에서 설정한다. 아래 값을 `h264` 또는 `jpeg`로 수정한 뒤 GUI를 다시 실행한다. 보드 송신 코덱도 같아야 한다.
+
+```yaml
+video:
+  codec: h264
+```
+
+프로젝트 루트에서 다음과 같이 실행한다. GUI의 `Video codec`은 현재 설정을 보여주는 읽기 전용 항목이다.
+
+```powershell
+.\build\Debug\pc-application.exe --config config/pc-application.yaml
+```
+
+`--config`를 생략하면 현재 작업 폴더의 `config/pc-application.yaml`을 먼저 찾고, 없으면 실행 파일 옆 `config/pc-application.yaml`을 읽는다. 배포용 설정은 빌드 시 복사된다. 파일이 없거나 코덱 값이 잘못되면 실행을 중단한다. 기존 `--video-codec` 옵션과 코덱 선택 드롭다운은 제거했다.
+
+### 수신 구조
+
+연결 설정은 `config/pc-application.yaml` 하나에서 관리한다. `video.bind_address` / `video.port`, `metadata.bind_address` / `metadata.port`는 PC의 UDP 수신 주소·포트이고, `control.host` / `control.port`는 PC가 TCP로 접속할 상대 서버 주소·포트다. `video.latency_ms`도 YAML에서 설정한다.
+
+`bind_address: 0.0.0.0`은 모든 IPv4 인터페이스에서 수신한다. 특정 PC 주소를 넣으면 해당 로컬 주소로 수신하며, 보드 IP를 넣는 항목이 아니다. 보드가 영상을 보낼 PC IP는 runtime 송신 설정에 넣는다. TCP의 `host`는 IP와 호스트 이름을 사용할 수 있고 UDP `bind_address`는 IPv4 주소만 지원한다.
+
+YAML을 기본으로 읽고, `--video-port`, `--metadata-port`, `--video-latency`를 명시한 경우에만 그 값을 덮어쓴다. 기본 UDP 포트는 5000/5001, 지연은 50ms다. 포트는 1~65535이며 두 UDP 포트는 달라야 한다. 잘못된 주소·범위의 설정은 시작 전에 거절한다. 설정 변경 후 앱을 재시작하면 되며 코드 재빌드는 필요 없다.
+
+`src/app/ApplicationController`는 영상·메타데이터 수신부와 `FrameSynchronizer`를 소유하고 시작·종료·초기화를 관리한다. 시작 실패 시 열린 소켓을 정리하며, 정지·오류·stream 변경 시 표시 상태를 초기화한다. `main.cpp`는 실행 설정과 UI 연결을 담당한다.
+
+`MainWindow` / `VideoWidget`은 표시와 사용자 입력을 처리한다. `ApplicationController`가 `ControlClient`에 운용 요청을 전달하며, 실제 운용 상태는 보드의 INIT / STATUS로 갱신한다. 영상 수신 여부와 TCP 제어 연결 상태는 별개다. `ControlProtocol`은 직렬화·파싱을, `ManualInputHandler`는 키 상태와 방향 합성을 담당한다.
+
+JPEG / H.264 수신 파이프라인 생성은 `src/video/VideoPipeline`에 모았다. 프리뷰 영상은 `src/app/GuiPreview`에서 생성하며 `--gui-preview`로만 사용한다. 이번 구조 변경으로 wire 형식은 바뀌지 않는다.
+
+### 모델 변경
+
+오른쪽 TARGET CONTROL과 VIDEO 사이 MODEL 드롭다운에서 모델을 선택하면 즉시 교체를 요청한다.
+PC YAML의 `models`는 표시 이름과 ID만 관리하며, 실제 모델 파일은 보드의 `model_catalog`가 결정한다.
+
+```yaml
+models:
+  - id: 1
+    name: YOLOv8n
+  - id: 2
+    name: YOLO26s
+```
+
+연결 후 TCP Pipeline(카테고리 4)의 Model count(0x01/0x81)로 개수를 조회하고,
+설정된 ID 중 보드의 `1..count`에 속하는 항목만 표시한다. 이름과 ID 대응은 보드 설정 변경 시 함께 관리한다.
+`models`를 생략하거나 빈 목록으로 두면 조회·교체 요청을 보내지 않으므로 기존 제어 서버와도 사용할 수 있다.
+
+선택 시 Change model(0x03)에 `request_id:u32, model_id:u32`를 Big Endian으로 전송한다.
+Model result(0x83)의 Accepted는 접수이며, Completed/OK를 받아야 현재 모델 표시를 갱신한다.
+기존 System ACK와 별도로 처리하며, 교체 중 드롭다운과 타깃·수동 조작을 잠근다. 영상 수신과 PING은 계속한다.
+runtime의 모델 교체는 기존 추적 타깃을 해제하므로 완료 후 타깃을 다시 선택한다.
+
+보드는 현재 활성 모델 ID를 조회하는 명령을 제공하지 않는다. 최초 접속·재접속의 현재 모델은 Unknown으로 표시하며,
+교체 성공 응답을 받은 경우에만 모델 이름을 확정한다. 실패 시 이전 모델 복구 성공과 복구 실패를 구분한다.
+`control.model_switch_timeout_ms`(기본 30000, 범위 1..60000)가 지나면 결과 미확인으로 표시하고
+늦은 완료 응답을 계속 기다린다. 타임아웃·재접속 시 교체를 자동 재전송하지 않는다.
+연결이 유지되는 동안에는 완료 응답이 올 때까지 조작 잠금을 유지한다.
+모델 클래스 이름과 순서는 공통 `class_names.txt`를 사용하므로 등록 모델 간 동일하게 맞춰야 한다.
+
+Mock 제어 서버는 모델 ID 1, 2와 200ms의 교체 응답을 시뮬레이션한다. 실제 모델 로드·추론 검증은 아니다.
+
+### TCP 제어 시험 절차
+
+현재 PC는 TCP 제어를 구현했으며, 실제 runtime 송신부·제어부는 별도 수정과 검증이 필요하다. 기본 YAML의 `control.host`는 로컬 Mock용 `127.0.0.1`, 포트는 `5002`다. 실제 짐벌에는 접근하지 않는다.
+
+프로젝트 루트에서 별도 터미널로 각각 실행한다.
+
+```powershell
+.\build\Debug\mock-control-server.exe
+```
+
+```powershell
+.\build\Debug\pc-application.exe --config config/pc-application.yaml
+```
+
+```powershell
+.\build\Debug\mock-video-sender.exe --codec h264 --metadata-port 5001 --frames 3000
+```
+
+- Track ID `7`을 입력하거나 박스를 클릭해 AUTO를 요청한다. 기본 Mock의 유효 ID는 `3,7,15,22`다. 없는 ID는 거절하고 기존 상태를 유지한다.
+- MANUAL 버튼 또는 영상의 빈 영역 클릭으로 수동 모드를 요청한다.
+- 영상 영역을 클릭한 뒤 방향키로 이동한다. 두 축 동시 입력은 대각 방향, 같은 축의 반대 키는 상쇄된다. 키를 모두 놓으면 `(0,0)`을 보낸다. 키 유지·자동 반복으로 명령을 반복 송신하지 않는다.
+- AUTO 중 방향키 입력도 수동 개입 요청으로 전달하며, 실제 타깃 해제와 MANUAL 전환은 보드가 판단한다.
+- Space로 기준 위치 복귀를 요청한다. 별도 HOME 버튼은 두지 않는다. Mock의 800ms HOME은 시뮬레이션이며 장비의 완료 판단 시간이 아니다.
+- Track ID 편집 중에는 방향키·Space가 제어 명령으로 전송되지 않는다. 영상 영역에서 다른 곳으로 포커스가 옮겨지면 이동 입력을 해제한다.
+- 화면 모드·타깃·짐벌 상태는 ACK가 아닌 INIT / STATUS로 갱신한다. 제어 연결이나 상태 정보가 없거나 HOMING·ERROR 상태이면 조작을 비활성화한다.
+
+기존 YAML의 `control`에서 연결 여부·주소·포트와 시험용 시간을 설정한다. `control`을 생략하거나 `enabled: false`이면 영상 수신만 실행한다. `ping_interval_ms`, `ack_timeout_ms`, `connect_timeout_ms`, `reconnect_interval_ms`는 실측 전 초기값이다. ACK timeout이면 재접속하며 이전 명령·키 상태를 복원하지 않는다. MOVE는 ACK 대상이 아니고 PING은 이동 입력과 독립적으로 실행한다.
+
+Mock 서버 옵션: `--host`, `--port`, `--track-ids`, `--home-ms`. `--port 0`이면 사용 가능한 포트를 출력한다. 실제 보드와 연동할 때는 보드가 동일 TCP 규격과 상태 정책을 구현한 뒤 `control.host`를 보드 IP로 변경한다.
+
+### 추적 메타데이터와 BBox
+
+GUI는 기본 UDP **5001**에서 **LWIR** 메타데이터를 수신한다. 헤더는 28바이트(Magic 4, Frame ID 8, RTP timestamp 4, guiStartedUs 8, Track count 4), Track은 25바이트(ID 4, xywh float32 16, Class ID 1, Confidence float32 4)다. Version·메시지 종류·원본 크기·Detection count는 전송하지 않는다. 다중 바이트 필드는 Big Endian이며 원본 좌표계는 640×480 고정이다. Frame ID 0인 패킷은 전체 폐기한다. Track ID 0은 해당 Track만 제외하며, Class ID 255는 정상적인 Unknown이다.
+
+보드 송신부도 이 형식을 사용해야 한다. 기존 LWIM v2는 호환되지 않는다. 보드 `gui.metadata.enabled`를 `true`, `gui.metadata.host`를 PC IP, `gui.metadata.port`를 `5001`로 맞춘다. 영상 UDP 5000과 메타데이터 UDP 5001 모두 PC에 도달해야 한다. 수신 포트는 `--metadata-port`로 변경할 수 있다.
+
+BBox는 원본 영상의 **왼쪽 위 x, y, width, height** 좌표다. 영상과 박스에 같은 배율과 중앙 여백을 적용하므로 창 크기·화면 배율을 바꿔도 위치가 맞는다. 박스 클릭도 같은 변환을 역으로 적용한다.
+
+박스 라벨은 첫 줄에 `ID 7`, 그 아래에 `person`처럼 클래스를 표시한다. 보드가 보내는 `class_id`를 사용하며, 기본 이름 목록 `config/class_names.txt`는 현재 runtime의 YOLOv8n 모델 설정에 있는 80개 클래스 순서다. 빌드 시 실행 파일 옆으로 복사된다.
+
+모델의 클래스 구성이 달라지면 UTF-8 파일에 **class 0부터 한 줄에 이름 하나씩** 작성해 지정한다. 빈 줄은 해당 ID의 이름이 없는 것으로 처리하며 이후 ID를 당기지 않는다. 목록에 없는 ID는 `Class 80`, 음수 ID는 `Unknown`으로 표시한다. 보드 모델과 PC 이름 목록은 같은 순서여야 한다.
+
+```powershell
+.\build\Debug\pc-application.exe --config config/pc-application.yaml --class-names config/class_names.txt
+```
+
+영상과 메타데이터는 RTP timestamp로 대응한다. 영상은 대기 없이 표시하며, 늦게 도착한 메타데이터는 현재 표시 중인 timestamp가 같을 때만 박스를 갱신한다. 다른 프레임의 박스는 재사용하지 않으며, 캐시는 최대 128개·500ms로 제한한다. 이 수치와 만료 동작은 **실측 전 PoC 설정**이며 최종 확정 정책이 아니다. 영상 크기가 640×480이 아니면 박스를 적용하지 않는다. 수신 stream 변경 시 대응 상태를 초기화한다.
+
+화면 밖 bbox는 영상 영역으로 자르고, 폭·높이 0 또는 잘라낸 뒤 빈 박스는 표시하지 않는다. NaN/Inf·음수 크기·Confidence 범위(0~1) 초과·Track ID 0은 해당 Track만 제외한다. 패킷 Magic·길이·count가 잘못된 경우 패킷 전체를 폐기한다. Wire의 Track count와 검증 후 표시되는 박스 수는 다를 수 있다. guiStartedUs는 송신 작업 시작 시각이며 이것만으로 네트워크 지연을 계산하지 않는다.
+
+`Metadata FPS`는 유효 패킷 수신율이다. `Track Count`는 현재 영상에 대응된 메타데이터의 **전송 레코드 수**이며, 툴팁에서 검증·클리핑 후 **표시 박스 수**를 별도로 확인한다. 예를 들어 3개를 수신하고 2개를 제외했다면 값은 `3`, 툴팁의 표시 수는 `1`이다. 정상적인 Track 0개 패킷은 `0`, 대응 메타데이터가 없거나 만료된 경우는 `--`로 구분한다.
+
+Detection count는 수신·추정·표시하지 않는다. `Metadata Loss`, `Video Missing`, `Sync Miss`의 실제 집계는 아직 미구현이므로 `--`로 표시하며 툴팁에도 미구현 상태를 명시한다. GUI는 들어온 메타데이터만 사용하며, 표시 제외나 메타데이터 부재를 보드의 TargetLost 상태로 해석하지 않는다. 대상 제어 명령 송신은 이번 수신·표시 기능과 별개다.
+
+PC 내부에서 이동하는 합성 영상과 박스를 함께 확인하려면 YAML의 코덱을 `h264`로 맞추고 GUI를 실행한 뒤 별도 터미널에서 다음 명령을 실행한다.
+
+```powershell
+.\build\Debug\mock-video-sender.exe --codec h264 --metadata-port 5001 --frames 300
+```
+
+이 Mock의 박스는 시험용 주석이며 NPU 검출 결과가 아니다. 자동 시험은 실제 UDP 수신, JPEG/H.264의 프레임 대응, 잘못된 패킷·지연·만료 처리, 창 크기·원본 해상도·DPI에 따른 박스 렌더링 및 클릭 위치를 확인한다.
+
+JPEG는 RTP payload 26, H.264는 96이며 영상 포트는 둘 다 5000이다. 코덱 변경은 YAML 수정 후 GUI를 재실행하여 적용한다. 같은 경로의 `--video-trace` 기록은 재실행 시 덮어쓰므로 시험별로 파일명을 지정한다.
+
+`Decode + delivery`는 최근 약 1초 동안 처리한 프레임의 **평균 처리시간(ms)** 이다. Jitter Buffer를 지난 마지막 RTP 조각부터 디코딩·RGB 변환·앱의 이미지 복사 완료까지 측정하며, 최대 약 5ms의 polling 대기도 포함한다. 네트워크 전송시간과 실제 화면 paint 시간은 포함하지 않는다. 프레임별 타임스탬프 CSV를 켤 필요는 없다.
+
+두 코덱 모두 같은 Jitter Buffer(기본 50ms)와 최신 이미지 1개 정책을 사용한다. H.264는 `h264parse`와 `avdec_h264`를 사용하며, Windows 배포에 필요한 `videoparsersbad`, `libav` 플러그인도 복사한다. H.264는 연결 중간에 수신을 시작하면 다음 IDR까지 기다릴 수 있다.
+
+PC 내부 시험에서 H.264 Mock Sender는 다음과 같이 실행한다. Mock은 소프트웨어 인코딩이므로 보드 하드웨어 성능 비교에는 사용하지 않는다.
+
+```powershell
+.\build\Debug\mock-video-sender.exe --codec h264 --frames 300
+```
+
+실제 비교는 보드의 `/home/orangepi/lwir-work/runtime-jpeg`에서 빌드한 송신 도구로 같은 RAW16 파일 또는 16비트 PNG 디렉터리를 재생한다. 다음 명령은 보드 SSH 터미널에서 각각 실행하며, PC YAML의 코덱도 맞추고 GUI를 재실행한다.
+
+```bash
+SEND=/home/orangepi/.cache/lwir-runtime/build/lwir_video_send
+$SEND --input /path/to/frames --codec jpeg --host <PC_IP> --seconds 30 --output /tmp/jpeg.csv
+$SEND --input /path/to/frames --codec h264 --host <PC_IP> --seconds 30 --output /tmp/h264.csv
+```
+
+보드 CSV는 전처리·인코딩/RTP의 평균 ms, CPU 사용률, 출력 FPS, RTP Mbps를 기록한다. 품질·비트레이트·표시 범위와 측정 구간의 상세 설명은 보드의 `tools/VIDEO_COMPARE.md`에 있다.
+
+보드 연결을 포함하는 선택 시험은 다음과 같다. 기본 자동 시험에는 보드가 필요하지 않다.
+
+```powershell
+$env:LWIR_BOARD_VIDEO_HOST = "<보드에서 접근 가능한 PC IPv4>"
+.\build\Debug\video-integration-test.exe receiveBoard -o build/board-test.txt,txt
+```
+
+Windows UDP 수신이 차단된 환경에서는 `$env:LWIR_BOARD_VIDEO_RELAY = "1"`로 SSH 경유 기능 검증을 할 수 있다. 이 경로는 Python과 SSH alias `pi`, 보드의 `/home/orangepi/.cache/lwir-runtime/build/lwir_video_send`를 사용한다. **SSH 경유 결과를 이더넷 성능 비교에 사용하지 않는다.** 직접 UDP 시험에는 해당 환경변수를 제거하고 PC UDP 5000의 수신 허용이 필요하다.
 
 아래 절차는 같은 PC에서 Mock 영상을 송수신하고 수신 처리 시간을 측정한다.
 
@@ -50,6 +213,8 @@ Set-Location C:\Project\LWIR_Project\pc-application
 
 ### 2. 터미널 1에서 수신기 실행
 
+아래 절차는 `config/pc-application.yaml`의 `video.codec: h264`를 기준으로 한다.
+
 ```powershell
 .\build\Debug\pc-application.exe --video-trace build/receiver.csv
 ```
@@ -59,7 +224,7 @@ Set-Location C:\Project\LWIR_Project\pc-application
 ### 3. 터미널 2에서 Mock Sender 실행
 
 ```powershell
-.\build\Debug\mock-video-sender.exe --frames 300 --trace build/sender.csv
+.\build\Debug\mock-video-sender.exe --codec h264 --frames 300 --trace build/sender.csv
 ```
 
 약 10초 동안 640×480, 30 FPS 테스트 영상을 전송한 뒤 송신기가 자동 종료한다. 더 오래 관찰하려면 `--frames 900`처럼 Frame 수를 늘린다.
@@ -110,7 +275,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/mock/video/Measure-Vid
 .\build\Debug\pc-application.exe --video-trace build/receiver.csv --video-packet-trace build/receiver-packets.csv
 
 # 터미널 2
-.\build\Debug\mock-video-sender.exe --frames 300 --trace build/sender.csv --packet-trace build/sender-packets.csv
+.\build\Debug\mock-video-sender.exe --codec h264 --frames 300 --trace build/sender.csv --packet-trace build/sender-packets.csv
 ```
 
 Packet 기록은 `build/receiver-packets.csv`, `build/sender-packets.csv`에 저장된다. ms 분석에는 `build/receiver.csv`를 사용한다.
@@ -123,13 +288,35 @@ Packet 기록은 `build/receiver-packets.csv`, `build/sender-packets.csv`에 저
 .\build\Debug\pc-application.exe --gui-preview
 ```
 
-- BBox를 클릭하면 해당 Track ID의 Target Set 요청이 발생한다.
-- 영상의 BBox가 없는 부분을 클릭하면 Target Clear 요청이 발생한다.
-- Track ID를 입력하거나 선택한 뒤 Track 버튼으로 요청할 수 있다.
+- 일반 실행에서는 BBox를 클릭하면 해당 Track ID의 AUTO 요청이 발생한다.
+- 일반 실행에서는 영상의 BBox가 없는 부분을 클릭하면 MANUAL 요청이 발생한다.
+- Track ID를 입력하거나 선택한 뒤 AUTO 버튼으로 요청할 수 있다.
 
-클릭 요청은 디버그 로그의 `TARGET_SET(ID) [GUI mock]`, `TARGET_CLEAR [GUI mock]`으로 확인한다. VS Code 디버거로 Preview를 실행하려면 `.vscode/launch.json`의 `Debug pc-application` 구성에 `"args": ["--gui-preview"]`를 추가한 뒤 F5를 누른다. 영상 수신 시험으로 돌아갈 때는 해당 인수를 제거한다.
+Preview는 레이아웃 확인용이며 영상 수신과 TCP 연결을 시작하지 않는다. 제어 시험은 위의 Mock 서버·일반 GUI 실행 절차를 사용한다. VS Code 디버거로 Preview를 실행하려면 `.vscode/launch.json`의 `Debug pc-application` 구성에 `"args": ["--gui-preview"]`를 추가한 뒤 F5를 누른다. 일반 실행으로 돌아갈 때는 해당 인수를 제거한다.
 
-## 계측 CSV 사용
+## 성능 체크 기록
+
+`config/pc-application.yaml`에서 기록을 켜고 앱을 재시작한다.
+
+```yaml
+performance:
+  enabled: true
+  output_dir: logs
+```
+
+상대 저장 경로는 선택한 YAML 파일의 폴더 기준이다. 위 설정이면 `config/logs/20261102_153000.csv`처럼 파일 하나를 만든다. 날짜·시간이 겹치면 번호를 붙이며, 시험별 하위 폴더나 별도 요약 파일은 만들지 않는다. 첫 줄에는 코덱·시작 시각·적용한 수신/TCP 설정을 한 번 기록한다. 둘째 줄은 열 이름이고, 아래는 약 1초 구간별 데이터다. 앱을 정상 종료하면 마지막 부분 구간도 저장한다.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/Measure-Performance.ps1 -Path config/logs/20261102_153000.csv
+```
+
+분석 결과는 표시 FPS, 수신 RTP Mbps, 지연 최소·평균·최대, TCP 연결 상실·재접속 시도·ACK timeout 횟수다. 전체 평균 지연은 유효 표본 수로, 전체 FPS/Mbps는 실제 관측 시간으로 가중한다. 표본이 없는 지연은 CSV 빈칸으로 기록한다.
+
+UI는 실제 그린 영상의 FPS와 현재 구간 평균 PC 수신→그리기 지연만 표시한다. 같은 영상 재그리기는 새 프레임으로 세지 않는다. 지연은 PC 첫 RTP 관측부터 GUI paint 관측까지이며 보드 인코딩·PC 도착 전 네트워크 구간·물리 모니터 출력 시간은 제외한다. TCP PING 응답시간도 보드·PC 처리를 포함하므로 영상 편도 네트워크 지연으로 해석하지 않는다. 수신 Mbps는 RTP 버퍼 바이트 기준이다.
+
+`enabled: false`일 때도 UI 지표는 동작한다. 저장에 실패하면 화면 아래에 `Recording incomplete`를 표시하고 영상·TCP 동작은 계속한다. 이 시험 CSV와 아래 개발용 프레임/패킷 trace는 서로 다른 형식이다.
+
+## 개발용 계측 CSV 사용
 
 Trace 옵션을 생략하면 기록하지 않는다. `--video-trace` / `--trace`는 Frame 요약을 켜며 Packet 상세는 별도 옵션으로 필요한 시험에서만 켠다. 두 출력에는 서로 다른 파일 경로를 사용한다.
 
@@ -160,7 +347,7 @@ ms 분석은 같은 PC의 Monotonic 시각 차이로 수신 처리 시간을 계
 수동 시험용 수신기와 송신기를 닫고 프로젝트 루트에서 실행한다. CMake와 CTest가 PATH에 있어야 하며, 시험은 별도의 UDP 15000 포트를 사용한다.
 
 ```powershell
-cmake -S . -B build -DBUILD_TESTING=ON
+cmake -S . -B build "-DCMAKE_PREFIX_PATH=$env:QT_ROOT" -DBUILD_TESTING=ON
 cmake --build build --config Debug
 ctest --test-dir build -C Debug --output-on-failure
 ```
@@ -175,6 +362,7 @@ ctest --test-dir build -C Debug --output-on-failure
 | --- | --- |
 | 실행 파일을 찾을 수 없음 | 터미널의 현재 폴더가 프로젝트 루트인지, Debug Build가 완료됐는지 확인한다. |
 | `cmake` / `ctest` 명령을 찾을 수 없음 | 개발환경의 PATH를 확인한다. 빌드는 VS Code CMake Tools에서도 실행할 수 있다. |
+| `Qt6Config.cmake`를 찾을 수 없음 | `QT_ROOT`가 실제 Qt의 `msvc2022_64` 폴더를 가리키는지 확인한다. 환경변수 변경 후 VS Code를 다시 열고 CMake 캐시를 삭제한 뒤 재설정한다. |
 | `No video`가 계속 표시됨 | 수신기를 먼저 실행했는지, Mock Sender가 아직 송신 중인지 확인한다. 기본 송신 주소는 `127.0.0.1`, 양쪽 기본 영상 포트는 UDP 5000이다. |
 | DLL 또는 GStreamer Plugin 오류 | Configure와 Debug Build를 다시 실행해 Runtime 배치를 완료한다. 실행 파일 옆의 DLL과 `gstreamer-1.0` 폴더가 필요하다. |
 | CSV가 없거나 Header만 있음 | Trace 옵션과 출력 폴더를 확인하고, 수신기를 정상 종료한 뒤 확인한다. 최신 Frame 요약은 실행 중 미확정 상태일 수 있다. |
