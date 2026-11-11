@@ -62,13 +62,15 @@ void VideoWidget::paintEvent(QPaintEvent *)
     pen.setCosmetic(true);
     painter.setPen(pen);
     QFont labelFont = font();
-    labelFont.setPixelSize(14);
+    labelFont.setPixelSize(11);
     labelFont.setBold(true);
     painter.setFont(labelFont);
     for (const auto &track : tracks) {
         painter.drawRect(track.bbox);
         const QString idLabel = QString("ID %1").arg(track.trackId);
-        const QString classLabel = classLabels.label(track.classId);
+        const QString classLabel = QString("%1  %2%")
+            .arg(classLabels.label(track.classId))
+            .arg(track.confidence * 100.0, 0, 'f', 0);
         const auto metrics = painter.fontMetrics();
         const qreal rowHeight = metrics.height() + 4;
         const qreal labelWidth = qMin(qreal(image.width()),
