@@ -131,7 +131,8 @@ private slots:
         QCOMPARE(model.view().metrics[4].maximum, 12.0);
         t.frameId = 15; t.values[4] = 100;
         QVERIFY(model.observe(t));
-        QCOMPARE(model.view().metrics[4].samples, quint64(2)); // Late raw row cannot rewind live statistics.
+        QCOMPARE(model.view().metrics[4].samples, quint64(3)); // Late unique rows contribute to CSV and cumulative stats.
+        QCOMPARE(model.view().metrics[4].maximum, 100.0);
         t.frameId = 18; t.modelGeneration = 1; t.modelId = 2;
         QVERIFY(model.observe(t));
         QCOMPARE(model.view().metrics[4].samples, quint64(1));
@@ -159,6 +160,40 @@ private slots:
         QTest::qWait(130);
         QVERIFY(model.observe(t)); // Repetition does not refresh age.
         QCOMPARE(model.view().state, RuntimeTelemetryView::State::Stale);
+    }
+
+    void cumulativeValuesSurviveWindowAndPause()
+    {
+        RuntimeTelemetryModel model;
+        model.start({});
+        auto t = sample(1);
+        t.values[4] = 100;
+        QVERIFY(model.observe(t));
+        QTest::qWait(1100); // Old rolling window would discard the peak here.
+        t.frameId = 2; t.values[4] = 20;
+        QVERIFY(model.observe(t));
+        QCOMPARE(model.view().metrics[4].average(), 60.0);
+        QCOMPARE(model.view().metrics[4].maximum, 100.0);
+        model.observe(t);
+        QCOMPARE(model.view().metrics[4].samples, quint64(2));
+        t.frameId = 3; t.sampleAgeMs = 2000; t.values[4] = 0;
+        QVERIFY(model.observe(t));
+        auto stale = model.view();
+        QCOMPARE(stale.state, RuntimeTelemetryView::State::Stale);
+        QCOMPARE(stale.metrics[4].average(), 40.0);
+        QCOMPARE(stale.metrics[4].maximum, 100.0);
+        MainWindow window;
+        window.setRuntimeTelemetry(stale);
+        QCOMPARE(window.findChild<QLabel *>("runtimeMetric4")->text(), QString("40.00 / 100.00"));
+        model.clear();
+        t.frameId = 4; t.sampleAgeMs = 0; t.values[4] = 40;
+        QVERIFY(model.observe(t));
+        QCOMPARE(model.view().metrics[4].average(), 40.0);
+        QCOMPARE(model.view().metrics[4].maximum, 100.0); // Same context resumes without losing the peak.
+        t.frameId = 5; t.modelGeneration++; t.modelId = 2; t.values[4] = 8;
+        QVERIFY(model.observe(t));
+        QCOMPARE(model.view().metrics[4].samples, quint64(1));
+        QCOMPARE(model.view().metrics[4].maximum, 8.0); // Explicit new context resets statistics.
     }
 
     void rawCsvAndAnalysis()

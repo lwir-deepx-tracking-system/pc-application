@@ -20,6 +20,7 @@ void RuntimeTelemetryModel::start(const QString &pcCsvPath)
     haveContext = blocked = false;
     retiredSessions.clear(); seenFrames.clear();
     newestFrame = retiredFrame = 0;
+    accumulated = {};
     active = true;
     timer.start();
     csvPath.clear();
@@ -36,13 +37,13 @@ void RuntimeTelemetryModel::stop()
     { std::lock_guard lock(mutex); closing = true; }
     wake.notify_one();
     if (writer.joinable()) writer.join(); // Drain accepted rows on normal shutdown.
-    recent.clear(); latest.reset();
+    latest.reset();
 }
 
 void RuntimeTelemetryModel::clear(bool awaitTransition)
 {
     blocked = blocked || (awaitTransition && haveContext);
-    recent.clear(); latest.reset();
+    latest.reset();
     emit viewChanged(view());
 }
 
@@ -72,7 +73,7 @@ bool RuntimeTelemetryModel::observe(const RuntimeTelemetry &t)
         modelId = t.modelId; trackerId = t.trackerId;
         haveContext = true; blocked = false;
         seenFrames.clear(); newestFrame = retiredFrame = 0;
-        recent.clear(); latest.reset();
+        accumulated = {}; latest.reset();
         if (differentSession) emit sessionChanged();
         emit viewChanged(view());
     }
@@ -84,12 +85,14 @@ bool RuntimeTelemetryModel::observe(const RuntimeTelemetry &t)
     }
     const auto now = clock.elapsed();
     enqueue(t, now); // Keep distinct out-of-order rows within the bounded deduplication window.
+    // Match raw CSV statistics: each accepted unique sample contributes once,
+    // including late samples. Reception age controls status, not the recorded data.
+    for (int i = 0; i < RuntimeWire::MetricCount; ++i)
+        if (t.validMask & (1u << i)) accumulated[i].add(t.values[i]);
     if (t.frameId > newestFrame) {
         newestFrame = t.frameId;
         if (t.validMask) {
             latest = Entry{t, now};
-            recent.push_back(*latest);
-            while (recent.size() > 256) recent.pop_front();
         }
     }
     return true;
@@ -99,24 +102,18 @@ RuntimeTelemetryView RuntimeTelemetryModel::view() const
 {
     RuntimeTelemetryView result;
     if (!latest) return result;
+    result.metrics = accumulated;
     const auto now = clock.elapsed();
     if (latest->sample.sampleAgeMs + double(now - latest->receivedMs) >= 2000) {
         result.state = RuntimeTelemetryView::State::Stale;
         return result;
     }
     result.state = RuntimeTelemetryView::State::Fresh;
-    for (const auto &entry : recent) {
-        if (now - entry.receivedMs >= 1000 || entry.sample.sampleAgeMs + double(now - entry.receivedMs) >= 2000) continue;
-        for (int i = 0; i < RuntimeWire::MetricCount; ++i)
-            if (entry.sample.validMask & (1u << i)) result.metrics[i].add(entry.sample.values[i]);
-    }
     return result;
 }
 
 void RuntimeTelemetryModel::refresh()
 {
-    const auto now = clock.elapsed();
-    while (!recent.empty() && now - recent.front().receivedMs >= 1000) recent.pop_front();
     emit viewChanged(view());
 }
 

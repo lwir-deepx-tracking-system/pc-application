@@ -146,7 +146,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     videoLatencyLabel->setToolTip("Current interval average ms: first RTP observed on this PC to GUI paint. Excludes board encoding and network transit to this PC; not physical monitor output.");
     panelLayout->addWidget(diagnosticGroup);
 
-    auto *runtimeGroup = new QGroupBox("RUNTIME (ms: avg / max)");
+    auto *runtimeGroup = new QGroupBox("RUNTIME (cumulative avg / max ms)");
     auto *runtimeLayout = new QVBoxLayout(runtimeGroup);
     runtimeStatusLabel = addValueRow(runtimeLayout, "Telemetry", "Unavailable");
     runtimeStatusLabel->setObjectName("runtimeStatus");
@@ -155,7 +155,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
         runtimeValueLabels[i] = addValueRow(runtimeLayout, names[i], "--");
         runtimeValueLabels[i]->setObjectName(QString("runtimeMetric%1").arg(RuntimeWire::DisplayMetrics[i]));
     }
-    runtimeGroup->setToolTip("Recent 1 s of unique received samples. Board durations only; excludes network and PC display. Encode + RTP includes pipeline waiting. Capture to RTP starts after capture completes.");
+    runtimeGroup->setToolTip("Cumulative unique received samples in the same session/model/tracker generation; refreshed every 1 s. Values remain on Stale. Capture to RTP: capture call finished to final RTP packet at board payloader; excludes capture call duration, network and PC display.");
     panelLayout->addWidget(runtimeGroup);
 
     connect(trackCombo, &QComboBox::editTextChanged, this, [this] {
@@ -183,9 +183,9 @@ void MainWindow::setRuntimeTelemetry(const RuntimeTelemetryView &view)
     runtimeStatusLabel->setText(view.state == State::Fresh ? "Fresh" : view.state == State::Stale ? "Stale" : "Unavailable");
     for (int i = 0; i < 4; ++i) {
         const auto &stats = view.metrics[RuntimeWire::DisplayMetrics[i]];
-        runtimeValueLabels[i]->setText(view.state == State::Fresh && stats.samples
+        runtimeValueLabels[i]->setText(view.state != State::Unavailable && stats.samples
             ? QString("%1 / %2").arg(stats.average(), 0, 'f', 2).arg(stats.maximum, 0, 'f', 2) : "--");
-        runtimeValueLabels[i]->setToolTip(QString("%1 valid unique samples in the recent 1 s window").arg(stats.samples));
+        runtimeValueLabels[i]->setToolTip(QString("%1 valid unique samples accumulated in this session/model/tracker generation").arg(stats.samples));
     }
 }
 

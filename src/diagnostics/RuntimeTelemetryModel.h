@@ -51,7 +51,7 @@ private:
     quint32 modelId = 0, trackerId = 0;
     std::deque<quint64> retiredSessions;
     std::set<quint64> seenFrames;
-    std::deque<Entry> recent;
+    std::array<PerformanceStatistics, RuntimeWire::MetricCount> accumulated{};
     std::optional<Entry> latest;
     QString csvPath;
     std::thread writer;
