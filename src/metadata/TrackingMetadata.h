@@ -5,6 +5,8 @@
 #include <QRectF>
 #include <QSize>
 #include <QVector>
+#include <optional>
+#include "RuntimeTelemetry.h"
 
 struct TrackBox
 {
@@ -24,6 +26,7 @@ struct TrackingMetadata
     QSize imageSize = QSize(640, 480);
     quint32 trackCount = 0; // Serialized records, before validation/display filtering.
     QVector<TrackBox> tracks;
+    std::optional<RuntimeTelemetry> telemetry;
 };
 Q_DECLARE_METATYPE(TrackingMetadata)
 

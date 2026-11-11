@@ -304,7 +304,7 @@ performance:
   output_dir: logs
 ```
 
-상대 저장 경로는 선택한 YAML 파일의 폴더 기준이다. 위 설정이면 `config/logs/20261102_153000.csv`처럼 파일 하나를 만든다. 날짜·시간이 겹치면 번호를 붙이며, 시험별 하위 폴더나 별도 요약 파일은 만들지 않는다. 첫 줄에는 코덱·시작 시각·적용한 수신/TCP 설정을 한 번 기록한다. 둘째 줄은 열 이름이고, 아래는 약 1초 구간별 데이터다. 앱을 정상 종료하면 마지막 부분 구간도 저장한다.
+상대 저장 경로는 선택한 YAML 파일의 폴더 기준이다. 위 설정이면 기존 PC 성능 파일 `config/logs/20261102_153000.csv`를 만든다. 날짜·시간이 겹치면 번호를 붙인다. 첫 줄에는 코덱·시작 시각·적용한 수신/TCP 설정을 한 번 기록한다. 둘째 줄은 열 이름이고, 아래는 약 1초 구간별 데이터다. 앱을 정상 종료하면 마지막 부분 구간도 저장한다. Runtime 통계가 수신되면 같은 실행 이름에 `_runtime`을 붙인 별도 원본 CSV도 만든다.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/Measure-Performance.ps1 -Path config/logs/20261102_153000.csv
@@ -312,9 +312,43 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/Measure-Performance.ps
 
 분석 결과는 표시 FPS, 수신 RTP Mbps, 지연 최소·평균·최대, TCP 연결 상실·재접속 시도·ACK timeout 횟수다. 전체 평균 지연은 유효 표본 수로, 전체 FPS/Mbps는 실제 관측 시간으로 가중한다. 표본이 없는 지연은 CSV 빈칸으로 기록한다.
 
-UI는 실제 그린 영상의 FPS와 현재 구간 평균 PC 수신→그리기 지연만 표시한다. 같은 영상 재그리기는 새 프레임으로 세지 않는다. 지연은 PC 첫 RTP 관측부터 GUI paint 관측까지이며 보드 인코딩·PC 도착 전 네트워크 구간·물리 모니터 출력 시간은 제외한다. TCP PING 응답시간도 보드·PC 처리를 포함하므로 영상 편도 네트워크 지연으로 해석하지 않는다. 수신 Mbps는 RTP 버퍼 바이트 기준이다.
+기존 PC 지표는 실제 그린 영상의 FPS와 현재 구간 평균 PC 수신→그리기 지연이다. 같은 영상 재그리기는 새 프레임으로 세지 않는다. 지연은 PC 첫 RTP 관측부터 GUI paint 관측까지이며 보드 인코딩·PC 도착 전 네트워크 구간·물리 모니터 출력 시간은 제외한다. TCP PING 응답시간도 보드·PC 처리를 포함하므로 영상 편도 네트워크 지연으로 해석하지 않는다. 수신 Mbps는 RTP 버퍼 바이트 기준이다.
 
 `enabled: false`일 때도 UI 지표는 동작한다. 저장에 실패하면 화면 아래에 `Recording incomplete`를 표시하고 영상·TCP 동작은 계속한다. 이 시험 CSV와 아래 개발용 프레임/패킷 trace는 서로 다른 형식이다.
+
+## Runtime 통계 수신·기록
+
+Runtime이 메타데이터 뒤에 고정 124바이트 `LWTM` 확장을 보내면, 영상 매칭과 독립적으로 이전 완료 프레임의 통계를 수신한다. 버전·flags·가변 확장 길이·측정 프레임 RTP timestamp 필드는 없다. 구형 패킷도 계속 수용하며 확장이 없으면 Runtime 패널만 `Unavailable`이다. **PC 기능만 구현한 상태이므로 실제 값은 Runtime 송신 구현·배포 후 수신된다.**
+
+| 확장 offset | 필드 | 바이트 |
+| --- | --- | --- |
+| 0 | `LWTM` magic (`4c57544d`) | 4 |
+| 4 / 12 / 20 / 28 | session_id / model_generation / tracker_epoch / metric_frame_id | 각 8 |
+| 36 | valid_mask (bit 0..17) | 4 |
+| 40 | sample_age_ms | 4 |
+| 44 / 48 | model_id / tracker_id | 각 4 |
+| 52 | 단계별 시간 18개 | 각 4 |
+
+정수와 IEEE-754 float32는 Big Endian이다. session·측정 frame·model·tracker ID는 양수, 세대·epoch는 0부터 허용한다. 측정 frame ID는 동봉한 현재 메타데이터의 frame ID보다 작아야 한다. age와 유효 측정값은 finite·0 이상이며 미사용 mask bit는 0이다. 잘린 확장·추가 바이트·잘못된 값은 패킷 전체를 폐기한다. PC는 기존 UDP 최대 길이 검증을 유지한다. 송신부가 1200B 한도를 쓸 때 확장 포함 최대 41 Track, 1177B이며, 표시 박스 제한은 Runtime 책임이다.
+
+시간값 순서는 [RuntimeTelemetry.h](src/metadata/RuntimeTelemetry.h)의 `MetricNames`와 [공유 바이트 fixture](tests/fixtures/runtime-telemetry.hex)를 기준으로 한다. fixture는 보드 실측이 아닌 프로토콜 시험 데이터다.
+
+- GUI: 추론 latency / Tracking / Encode+RTP / Capture→RTP ready의 동일 세션·모델 세대·tracker epoch 내 **누적 평균 / 누적 최대(ms)**를 1초마다 갱신한다. 평균은 유효한 고유 수신 표본의 산술평균이고 최대는 그 표본 중 최고값이다. 시간이 지나거나 작은 값이 들어와도 최대값은 줄지 않는다. 세션·모델 세대·tracker epoch 변경 또는 새 수신 실행에서 초기화한다. 기존 폰트는 유지하고 오른쪽 패널은 스크롤 가능하다.
+- 최근 표본의 송신 시 age + PC 수신 후 경과가 2초 이상이면 `Stale`로 표시하되 누적 평균·최대는 유지한다. 반복 snapshot은 새 표본이나 새 수신 상태로 집계하지 않는다. 통계 미수신·전환 대기·구형 패킷 수신 중에는 `Unavailable`/`--`로 표시한다. 같은 세대의 새 고유 표본 수신이 재개되면 누적 통계를 이어간다.
+- 새 세션·모델 세대·트래커 epoch에서는 집계를 초기화한다. 모델 전환 요청 시 기존 세대를 차단한다. 통계가 없는 패킷과 스트림 초기화에서도 화면 값을 지운다.
+- 화면 집계는 항목별 합계·최소·최대·표본 수만 보존한다. 중복 검사는 4096개 frame ID, 퇴역 세션은 16개로 제한한다. 중복 검사 범위보다 오래된 frame은 버린다. 같은 세대의 처음 본 역순 표본도 CSV와 누적 통계에 한 번 반영하지만 최신 수신 상태·표본 나이는 되돌리지 않는다. 퇴역 세션 캐시는 무기한 패킷 재생 방지를 보장하지 않는다.
+
+`performance.enabled: true`이면 최초 유효 고유 통계 수신 시 `<PC 파일명>_runtime.csv`를 만든다. 각 행은 PC 수신 시각·경과 시간, 세션·모델/트래커 세대·측정 프레임 ID, 모델/트래커 ID, 유효 마스크, sample_age와 **18개 원본 시간값**이다. 미측정 값은 빈칸, 실제 측정된 0ms는 `0`이다. CSV 기록은 별도 writer 스레드에서 처리하며 대기 큐는 1024행(별도 처리 중 batch 최대 1024행)이다. 큐 초과나 파일 오류는 `Recording incomplete`로 알리고 영상·제어는 계속한다. 정상 종료 시 접수한 행을 저장한다. `enabled: false`여도 GUI 통계는 동작한다.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/Measure-RuntimeTelemetry.ps1 -Path config/logs/20261111_100000_runtime.csv
+# 선택한 시간 구간·모델만 분석 (elapsed_s 기준, 경계 포함)
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/Measure-RuntimeTelemetry.ps1 -Path config/logs/20261111_100000_runtime.csv -FromElapsed 10 -ToElapsed 60 -ModelId 1 -AsJson
+```
+
+분석은 세션·모델 세대·tracker epoch·모델/트래커 ID별로 분리하여 최소·산술평균·최대·유효 표본 수를 출력한다. 중복 표본과 미측정 값은 계산에서 제외하며 유효 표본이 없으면 결과를 비워 둔다. CSV는 PC가 받은 표본의 기록이므로 Runtime 전 프레임 CSV와 같지 않다. 프레임 ID 간격을 네트워크 유실로 해석하지 않는다.
+
+Encode+RTP는 큐 대기·변환·인코딩·packetize가 포함될 수 있고, Capture→RTP ready는 capture 호출 완료부터 보드 RTP marker까지다. 네트워크·PC 표시·센서 노출·물리 모터 응답은 포함하지 않는다. 이 값과 PC 지연을 단순 합산해 전체 지연으로 표시하지 않는다.
 
 ## 개발용 계측 CSV 사용
 

@@ -68,6 +68,7 @@ int main(int argc, char *argv[])
     QObject::connect(&controller, &ApplicationController::frameReady, &window, &MainWindow::setDisplayFrame);
     QObject::connect(&controller, &ApplicationController::videoFpsChanged, &window, &MainWindow::setVideoFps);
     QObject::connect(&controller, &ApplicationController::videoLatencyChanged, &window, &MainWindow::setVideoLatency);
+    QObject::connect(&controller, &ApplicationController::runtimeTelemetryChanged, &window, &MainWindow::setRuntimeTelemetry);
     QObject::connect(&controller, &ApplicationController::performanceError, &window, [&window](const QString &message) {
         qWarning().noquote() << message;
         window.showRecordingError(message);

@@ -8,6 +8,7 @@
 #include <QPushButton>
 #include <QRegularExpressionValidator>
 #include <QSignalBlocker>
+#include <QScrollArea>
 #include <QStatusBar>
 #include <QVBoxLayout>
 #include <limits>
@@ -67,7 +68,13 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     auto *panelLayout = new QVBoxLayout(panel);
     panelLayout->setContentsMargins(0, 0, 0, 0);
     panelLayout->setSpacing(10);
-    layout->addWidget(panel);
+    auto *panelScroll = new QScrollArea;
+    panelScroll->setWidget(panel);
+    panelScroll->setWidgetResizable(true);
+    panelScroll->setFrameShape(QFrame::NoFrame);
+    panelScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    panelScroll->setFixedWidth(panel->width() + 20);
+    layout->addWidget(panelScroll);
 
     auto *statusGroup = new QGroupBox("SYSTEM STATUS");
     auto *statusLayout = new QVBoxLayout(statusGroup);
@@ -139,6 +146,18 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     videoLatencyLabel->setToolTip("Current interval average ms: first RTP observed on this PC to GUI paint. Excludes board encoding and network transit to this PC; not physical monitor output.");
     panelLayout->addWidget(diagnosticGroup);
 
+    auto *runtimeGroup = new QGroupBox("RUNTIME (cumulative avg / max ms)");
+    auto *runtimeLayout = new QVBoxLayout(runtimeGroup);
+    runtimeStatusLabel = addValueRow(runtimeLayout, "Telemetry", "Unavailable");
+    runtimeStatusLabel->setObjectName("runtimeStatus");
+    const std::array<QString, 4> names = {"Inference", "Tracking", "Encode + RTP", "Capture to RTP"};
+    for (int i = 0; i < 4; ++i) {
+        runtimeValueLabels[i] = addValueRow(runtimeLayout, names[i], "--");
+        runtimeValueLabels[i]->setObjectName(QString("runtimeMetric%1").arg(RuntimeWire::DisplayMetrics[i]));
+    }
+    runtimeGroup->setToolTip("Cumulative unique received samples in the same session/model/tracker generation; refreshed every 1 s. Values remain on Stale. Capture to RTP: capture call finished to final RTP packet at board payloader; excludes capture call duration, network and PC display.");
+    panelLayout->addWidget(runtimeGroup);
+
     connect(trackCombo, &QComboBox::editTextChanged, this, [this] {
         updateControlActions();
     });
@@ -156,6 +175,18 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 void MainWindow::setVideoFps(double fps)
 {
     videoFpsLabel->setText(QString::number(fps, 'f', 1));
+}
+
+void MainWindow::setRuntimeTelemetry(const RuntimeTelemetryView &view)
+{
+    using State = RuntimeTelemetryView::State;
+    runtimeStatusLabel->setText(view.state == State::Fresh ? "Fresh" : view.state == State::Stale ? "Stale" : "Unavailable");
+    for (int i = 0; i < 4; ++i) {
+        const auto &stats = view.metrics[RuntimeWire::DisplayMetrics[i]];
+        runtimeValueLabels[i]->setText(view.state != State::Unavailable && stats.samples
+            ? QString("%1 / %2").arg(stats.average(), 0, 'f', 2).arg(stats.maximum, 0, 'f', 2) : "--");
+        runtimeValueLabels[i]->setToolTip(QString("%1 valid unique samples accumulated in this session/model/tracker generation").arg(stats.samples));
+    }
 }
 
 void MainWindow::setVideoLatency(double milliseconds)

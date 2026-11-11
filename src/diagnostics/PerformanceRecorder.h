@@ -45,6 +45,7 @@ public:
     void reconnectAttempted();
     void ackTimedOut();
     QString outputPath() const { return file.fileName(); }
+    bool isRecording() const { return file.isOpen(); }
 
 signals:
     void sampleReady(const PerformanceSample &sample);
