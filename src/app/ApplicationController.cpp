@@ -6,7 +6,16 @@ ApplicationController::ApplicationController(QObject *parent) : QObject(parent)
         [this](const QImage &image, quint64, qint64 timestamp, quint64 deliveryId) {
             synchronizer.submitVideo(image, timestamp, deliveryId);
         });
-    connect(&metadata, &MetadataReceiver::frameReady, &synchronizer, &FrameSynchronizer::submitMetadata);
+    connect(&metadata, &MetadataReceiver::frameReady, this, [this](const TrackingMetadata &data) {
+        // Telemetry refers to an earlier frame; never wait for video timestamp matching.
+        if (data.telemetry) {
+            if (!runtimeTelemetry.observe(*data.telemetry)) return;
+        } else runtimeTelemetry.clear();
+        synchronizer.submitMetadata(data);
+    });
+    connect(&runtimeTelemetry, &RuntimeTelemetryModel::sessionChanged, this, &ApplicationController::resetStream);
+    connect(&runtimeTelemetry, &RuntimeTelemetryModel::viewChanged, this, &ApplicationController::runtimeTelemetryChanged);
+    connect(&runtimeTelemetry, &RuntimeTelemetryModel::errorOccurred, this, &ApplicationController::performanceError);
     connect(&video, &VideoReceiver::streamRestarted, this, &ApplicationController::resetStream);
     connect(&synchronizer, &FrameSynchronizer::frameReady, this, &ApplicationController::frameReady);
     connect(&synchronizer, &FrameSynchronizer::trackCountsChanged, this, &ApplicationController::trackCountsChanged);
@@ -51,9 +60,12 @@ ApplicationController::ApplicationController(QObject *parent) : QObject(parent)
     connect(&control, &ControlClient::errorOccurred, this, &ApplicationController::controlError);
     connect(&control, &ControlClient::modelStateChanged, this, [this](const Control::ModelState &state) {
         if (state.busy && !modelWasBusy) {
+            runtimeTelemetry.clear(true);
             emit inputResetRequested();
             resetStream();
         }
+        if (modelWasBusy && !state.busy && state.status != Control::pipelineResultName(Control::PipelineResult::Ok))
+            runtimeTelemetry.cancelTransition();
         modelWasBusy = state.busy;
         emit modelStateChanged(state);
         emit manualInputEnabledChanged(control.canControl());
@@ -75,6 +87,7 @@ bool ApplicationController::start(const ReceiverSettings &settings, const Perfor
         return false;
     }
     performance.start(performanceSettings, settings, controlSettings);
+    runtimeTelemetry.start(performance.isRecording() ? performance.outputPath() : QString());
     if (!metadata.start(settings.metadataPort, settings.metadataBindAddress)) return false;
     if (!video.start(settings.videoPort, settings.tracePath, settings.latencyMs,
                      settings.packetTracePath, settings.codec, settings.videoBindAddress)) return false;
@@ -87,6 +100,7 @@ void ApplicationController::stop()
     emit inputResetRequested();
     stopReception();
     performance.stop();
+    runtimeTelemetry.stop();
 }
 
 void ApplicationController::stopReception()
@@ -98,6 +112,7 @@ void ApplicationController::stopReception()
 
 void ApplicationController::resetStream()
 {
+    runtimeTelemetry.clear();
     synchronizer.clear();
     video.resetMeasurementTimes();
     performance.resetFrames();

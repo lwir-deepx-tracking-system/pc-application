@@ -6,6 +6,7 @@
 #include "control/ControlClient.h"
 #include "config/ReceiverSettings.h"
 #include "diagnostics/PerformanceRecorder.h"
+#include "diagnostics/RuntimeTelemetryModel.h"
 
 // Coordinates reception and user requests; the board owns operating state.
 class ApplicationController : public QObject
@@ -33,6 +34,7 @@ signals:
     void metadataFpsChanged(double fps);
     void videoLatencyChanged(double milliseconds);
     void performanceSampleReady(const PerformanceSample &sample);
+    void runtimeTelemetryChanged(const RuntimeTelemetryView &view);
     void performanceError(const QString &message);
     void streamReset();
     void errorOccurred(const QString &message);
@@ -54,4 +56,5 @@ private:
     MetadataReceiver metadata;
     FrameSynchronizer synchronizer;
     PerformanceRecorder performance;
+    RuntimeTelemetryModel runtimeTelemetry;
 };

@@ -80,8 +80,14 @@ target_include_directories(performance-recorder PUBLIC src)
 target_link_libraries(performance-recorder PUBLIC Qt6::Core)
 
 qt_add_library(application-controller STATIC src/app/ApplicationController.cpp src/app/ApplicationController.h)
+
+qt_add_library(runtime-telemetry STATIC
+    src/metadata/RuntimeTelemetry.h
+    src/diagnostics/RuntimeTelemetryModel.cpp src/diagnostics/RuntimeTelemetryModel.h)
+target_include_directories(runtime-telemetry PUBLIC src)
+target_link_libraries(runtime-telemetry PUBLIC performance-recorder Qt6::Core)
 target_include_directories(application-controller PUBLIC src)
-target_link_libraries(application-controller PUBLIC video-receiver metadata-receiver control-client performance-recorder)
+target_link_libraries(application-controller PUBLIC video-receiver metadata-receiver control-client performance-recorder runtime-telemetry)
 
 function(deploy_qt_runtime target)
     if(WIN32)
@@ -121,7 +127,7 @@ qt_add_library(application-ui STATIC
     src/ui/ClassLabels.h
 )
 target_include_directories(application-ui PUBLIC src)
-target_link_libraries(application-ui PUBLIC Qt6::Widgets control-client)
+target_link_libraries(application-ui PUBLIC Qt6::Widgets control-client runtime-telemetry)
 
 qt_add_executable(pc-application src/main.cpp src/app/GuiPreview.cpp src/app/GuiPreview.h)
 
@@ -162,6 +168,12 @@ deploy_qt_runtime(mock-control-server)
 if(BUILD_TESTING)
     enable_testing()
     find_package(Qt6 REQUIRED COMPONENTS Test)
+    qt_add_executable(runtime-telemetry-test tests/diagnostics/RuntimeTelemetryTest.cpp)
+    set_target_properties(runtime-telemetry-test PROPERTIES WIN32_EXECUTABLE FALSE)
+    target_compile_definitions(runtime-telemetry-test PRIVATE TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(runtime-telemetry-test PRIVATE application-controller application-ui Qt6::Test)
+    deploy_runtime(runtime-telemetry-test)
+    add_test(NAME runtime-telemetry COMMAND runtime-telemetry-test -o -,txt)
     qt_add_executable(performance-test tests/diagnostics/PerformanceTest.cpp)
     set_target_properties(performance-test PROPERTIES WIN32_EXECUTABLE FALSE)
     target_link_libraries(performance-test PRIVATE performance-recorder app-config video-receiver Qt6::Test)

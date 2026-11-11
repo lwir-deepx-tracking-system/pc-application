@@ -12,8 +12,9 @@ bool decodeTrackingMetadata(const QByteArray &packet, TrackingMetadata &result)
     const auto real = [&u32](int offset) { return std::bit_cast<float>(u32(offset)); };
     if (u32(0) != TrackingWire::Magic) return false;
     const quint32 count = u32(24);
-    if (count > quint32((packet.size() - TrackingWire::HeaderSize) / TrackingWire::TrackSize)
-        || packet.size() != TrackingWire::HeaderSize + qsizetype(count) * TrackingWire::TrackSize) return false;
+    if (count > quint32((packet.size() - TrackingWire::HeaderSize) / TrackingWire::TrackSize)) return false;
+    const qsizetype base = TrackingWire::HeaderSize + qsizetype(count) * TrackingWire::TrackSize;
+    if (packet.size() != base && packet.size() != base + RuntimeWire::Size) return false;
 
     TrackingMetadata decoded;
     decoded.frameId = qFromBigEndian<quint64>(data + 4);
@@ -21,6 +22,23 @@ bool decodeTrackingMetadata(const QByteArray &packet, TrackingMetadata &result)
     decoded.rtpTimestamp = u32(12);
     decoded.guiStartedUs = qFromBigEndian<quint64>(data + 16);
     decoded.trackCount = count;
+    if (packet.size() != base) {
+        if (u32(int(base)) != RuntimeWire::Magic) return false;
+        RuntimeTelemetry t;
+        const auto u64 = [data, base](int offset) { return qFromBigEndian<quint64>(data + base + offset); };
+        t.sessionId = u64(4); t.modelGeneration = u64(12); t.trackerEpoch = u64(20); t.frameId = u64(28);
+        t.validMask = u32(int(base) + 36);
+        t.sampleAgeMs = real(int(base) + 40);
+        t.modelId = u32(int(base) + 44); t.trackerId = u32(int(base) + 48);
+        if (!t.sessionId || !t.frameId || t.frameId >= decoded.frameId || !t.modelId || !t.trackerId
+            || (t.validMask & ~RuntimeWire::ValidBits) || !std::isfinite(t.sampleAgeMs) || t.sampleAgeMs < 0) return false;
+        for (int i = 0; i < RuntimeWire::MetricCount; ++i) {
+            if (!(t.validMask & (1u << i))) continue; // Invalid slots never become measured zeroes.
+            t.values[i] = real(int(base) + 52 + 4 * i);
+            if (!std::isfinite(t.values[i]) || t.values[i] < 0) return false;
+        }
+        decoded.telemetry = t;
+    }
     decoded.tracks.reserve(count);
     for (quint32 i = 0; i < count; ++i) {
         const int offset = TrackingWire::HeaderSize + int(i) * TrackingWire::TrackSize;

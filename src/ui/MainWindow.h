@@ -6,6 +6,7 @@
 #include "video/VideoCodec.h"
 #include "control/ControlProtocol.h"
 #include "config/ModelSettings.h"
+#include "diagnostics/RuntimeTelemetryModel.h"
 
 class QComboBox;
 class QPushButton;
@@ -31,6 +32,7 @@ public:
     void setClassLabels(const ClassLabels &labels);
     void setModels(const ModelOptions &models);
     void setModelState(const Control::ModelState &state);
+    void setRuntimeTelemetry(const RuntimeTelemetryView &view);
 
 signals:
     void autoRequested(quint32 trackId);
@@ -56,6 +58,8 @@ private:
     QLabel *videoFpsLabel;
     QLabel *videoLatencyLabel;
     QLabel *videoCodecLabel;
+    QLabel *runtimeStatusLabel;
+    std::array<QLabel *, 4> runtimeValueLabels;
     QSet<quint32> availableTrackIds;
     QComboBox *modelCombo;
     QLabel *currentModelLabel, *modelStatusLabel;
