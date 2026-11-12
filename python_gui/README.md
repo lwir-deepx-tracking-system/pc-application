@@ -46,12 +46,14 @@ The LAN bridge currently supports dynamic detection and tracker catalog
 queries and changes, active tracker policy readback, warmth/edge/confirmation
 and GMC setting changes, ByteTrack KeepID preset switching, click selection,
 manual move/stop, and status/people readback.
-Policy changes replace the active tracker and reset its tracks/IDs. The
-original page also calls routes for GMC toggle, ReID switching, measurement,
-replay, performance, camera, and system controls. Those still require Runtime
-LAN commands and are shown as unavailable or return an explicit failure. The confirmation frame count readback is
-the current count after frame rate adjustment. Do not treat this as a feature complete
-replacement or launch the Python tracking HTTP server.
+Policy changes replace the active tracker and reset its tracks/IDs. Filter
+tiles can restore a threshold only after the corresponding value was entered
+in Filter settings. Prediction control and predicted box display require new
+Runtime commands and are unavailable. Hot ReID switching, measurement,
+replay, camera, and system controls also require Runtime LAN commands and
+return an explicit failure. The confirmation frame count readback is the
+current count after frame rate adjustment. Do not treat this as a feature
+complete replacement or launch the Python tracking HTTP server.
 
 The final layout remains the source page; only its transport boundary may be
 adapted. The Orange Pi keeps its C++ Runtime and Benchmark architecture.

@@ -71,6 +71,21 @@ class RouteTest(unittest.TestCase):
         self.assertFalse(answer["ok"])
         self.assertEqual(self.control.changed, [])
 
+    def test_filter_tiles_restore_applied_thresholds(self):
+        self.routes.handle("/rules")
+        self.routes.handle("/rules/set?warm_on=0", "POST")
+        self.routes.handle("/rules/set?warm_on=1", "POST")
+        self.routes.handle("/rules/set?edge_on=0", "POST")
+        self.routes.handle("/rules/set?edge_on=1", "POST")
+        self.assertEqual(self.control.policies, [
+            dict(warmth_min=0, warmth_max=0),
+            dict(warmth_min=8000, warmth_max=64000),
+            dict(edge_birth=0.0), dict(edge_birth=0.5)])
+
+    def test_filter_tiles_require_an_initial_value(self):
+        self.assertFalse(self.routes.handle("/rules/set?edge_on=1", "POST")["ok"])
+        self.assertFalse(self.routes.handle("/rules/set?warm_on=1", "POST")["ok"])
+
     def test_gmc_and_keepid_use_existing_runtime_changes(self):
         self.assertTrue(self.routes.handle("/rules/set?stab=1", "POST")["stab"])
         self.assertEqual(self.control.policies, [dict(gmc=True)])

@@ -16,6 +16,7 @@ class DesktopRoutes:
         self.latest = latest
         self.started = time.monotonic()
         self.previous_warmth = (0, 0)
+        self.previous_edge = 0.0
         self.perf_rows = deque(maxlen=900)
         self.perf_last = None
 
@@ -44,6 +45,8 @@ class DesktopRoutes:
         policy = self.control.tracker_policy()
         if policy["warmth_min"] or policy["warmth_max"]:
             self.previous_warmth = (policy["warmth_min"], policy["warmth_max"])
+        if policy["edge_birth"] > 0:
+            self.previous_edge = policy["edge_birth"]
         can_relabel = policy["tracker_id"] in (1, 3) and any(
             x["id"] == 3 and x["available"] for x in catalog)
         return dict(presets=[dict(key=str(x["id"]), name=x["name"],
@@ -53,7 +56,7 @@ class DesktopRoutes:
                     warm_min=policy["warmth_min"], warm_max=policy["warmth_max"],
                     warm_on=bool(policy["warmth_min"] or policy["warmth_max"]),
                     warm_prev=list(self.previous_warmth),
-                    edge_birth=policy["edge_birth"],
+                    edge_birth=policy["edge_birth"], edge_prev=self.previous_edge,
                     confirm=dict(ms=policy["confirmation_ms"],
                                  frames=policy["confirmation_frames"], fps=0),
                     predictors=[dict(key="kalman", available=True)],
@@ -129,20 +132,27 @@ class DesktopRoutes:
                         return dict(ok=False, text="KeepID는 ByteTrack 모드에서만 바꿀 수 있습니다")
                     result = self.control.change("tracker", 3 if requested == "1" else 1)
                 else:
-                    keys = {"warm_min", "warm_max", "edge_birth", "confirm_ms", "warm_on", "stab"}
-                    if not query or set(query) - keys or (any(k in query for k in ("warm_on", "stab")) and len(query) != 1):
+                    keys = {"warm_min", "warm_max", "edge_birth", "confirm_ms", "warm_on", "edge_on", "stab"}
+                    if not query or set(query) - keys or (any(k in query for k in ("warm_on", "edge_on", "stab")) and len(query) != 1):
                         return dict(ok=False, text="이 설정은 Runtime LAN 명령으로 아직 지원하지 않습니다")
                     if "stab" in query:
                         if query["stab"][0] not in ("0", "1"):
                             return dict(ok=False, text="흔들림 보정 값은 0 또는 1이어야 합니다")
                         values = dict(gmc=query["stab"][0] == "1")
+                    elif "edge_on" in query:
+                        requested = query["edge_on"][0]
+                        if requested not in ("0", "1"):
+                            return dict(ok=False, text="가장자리 Filter 값은 0 또는 1이어야 합니다")
+                        if requested == "1" and self.previous_edge <= 0:
+                            return dict(ok=False, text="가장자리 점수를 아래 Filter 값에 먼저 입력하세요")
+                        values = dict(edge_birth=self.previous_edge if requested == "1" else 0.0)
                     elif "warm_on" in query:
                         if query["warm_on"][0] == "0":
                             values = dict(warmth_min=0, warmth_max=0)
                         elif query["warm_on"][0] == "1" and any(self.previous_warmth):
                             values = dict(zip(("warmth_min", "warmth_max"), self.previous_warmth))
                         else:
-                            return dict(ok=False, text="복원할 온도 범위가 없습니다. 값을 먼저 입력하세요")
+                            return dict(ok=False, text="온도 범위를 아래 Filter 값에 먼저 입력하세요")
                     else:
                         names = dict(warm_min="warmth_min", warm_max="warmth_max",
                                      edge_birth="edge_birth", confirm_ms="confirmation_ms")
