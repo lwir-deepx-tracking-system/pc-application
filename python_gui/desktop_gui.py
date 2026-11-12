@@ -139,8 +139,8 @@ class DesktopApp:
         if not sample or self.pending_frame or not self.web_ready:
             return Gst.FlowReturn.OK
         caps = sample.get_caps()
-        info = GstVideo.VideoInfo()
-        if not info.from_caps(caps):
+        ok, info = GstVideo.VideoInfo().from_caps(caps)
+        if not ok:
             return Gst.FlowReturn.OK
         buffer = sample.get_buffer()
         ok, mapped = buffer.map(Gst.MapFlags.READ)
