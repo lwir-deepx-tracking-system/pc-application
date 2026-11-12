@@ -93,6 +93,60 @@ private slots:
         QCOMPARE(qvariant_cast<ModelState>(states.last()[0]).status, pipelineResultName(PipelineResult::Busy));
     }
 
+    void trackerWireAndGui()
+    {
+        using namespace Control;
+        QCOMPARE(encode({Category::Pipeline, quint8(PipelineCommand::ChangeTracker),
+            QByteArray::fromHex("0000000300000005")}),
+            QByteArray::fromHex("4c574952040400080000000300000005"));
+        MockControlServer board;
+        QVERIFY(board.listen(QHostAddress::LocalHost, 0));
+        auto settings = settingsFor(board.port());
+        settings.trackerSwitchEnabled = true;
+        settings.pingIntervalMs = 40;
+        ApplicationController controller;
+        MainWindow window;
+        connect(&controller, &ApplicationController::controlConnectionChanged, &window, &MainWindow::setControlConnection);
+        connect(&controller, &ApplicationController::boardStateChanged, &window, &MainWindow::setBoardState);
+        connect(&controller, &ApplicationController::trackerStateChanged, &window, &MainWindow::setTrackerState);
+        connect(&window, &MainWindow::trackerRequested, &controller, &ApplicationController::requestTracker);
+        connect(&window, &MainWindow::homeRequested, &controller, &ApplicationController::requestHome);
+        auto *combo = window.findChild<QComboBox *>("trackerCombo");
+        auto *current = window.findChild<QLabel *>("currentTracker");
+        auto *status = window.findChild<QLabel *>("trackerStatus");
+        QSignalSpy states(&controller, &ApplicationController::trackerStateChanged);
+        controller.startControl(settings);
+        QTRY_VERIFY(combo->isEnabled());
+        QCOMPARE(combo->count(), 6);
+        QCOMPARE(combo->currentIndex(), -1);
+        QCOMPARE(current->text(), QString("Unknown"));
+        combo->setCurrentIndex(4);
+        QVERIFY(QMetaObject::invokeMethod(combo, "activated", Q_ARG(int, 4)));
+        QVERIFY(!combo->isEnabled());
+        QVERIFY(!window.findChild<QPushButton *>("homeButton")->isEnabled());
+        QCOMPARE(current->text(), QString("Unknown"));
+        QTRY_COMPARE(current->text(), QString("Tracker 5"));
+        QCOMPARE(status->text(), QString("Tracker changed"));
+        QVERIFY(combo->isEnabled());
+        board.setTrackerResult(PipelineResult::CreationFailed);
+        controller.requestTracker(2);
+        QTRY_COMPARE(status->text(), pipelineResultName(PipelineResult::CreationFailed, true));
+        QCOMPARE(current->text(), QString("Unknown"));
+        board.setTrackerResult(PipelineResult::Ok);
+        controller.requestTracker(1);
+        QTRY_COMPARE(current->text(), QString("Tracker 1"));
+        auto *home = window.findChild<QPushButton *>("homeButton");
+        QVERIFY(home->isEnabled());
+        home->click();
+        QTRY_COMPARE(board.boardState().gimbal, GimbalState::Homing);
+        QVERIFY(!home->isEnabled());
+        QTRY_COMPARE(board.boardState().gimbal, GimbalState::Idle);
+        controller.stop();
+        QCOMPARE(current->text(), QString("Unknown"));
+        QVERIFY(!combo->isEnabled());
+        QVERIFY(!states.isEmpty());
+    }
+
     void modelFailuresAndGui()
     {
         using namespace Control;
@@ -143,6 +197,38 @@ private slots:
         controller.stop();
         QCOMPARE(current->text(), QString("Unknown"));
         QVERIFY(!combo->isEnabled());
+    }
+
+    void trackerTimeoutAndReconnect()
+    {
+        using namespace Control;
+        MockControlServer board;
+        board.setTrackerDuration(650);
+        QVERIFY(board.listen(QHostAddress::LocalHost, 0));
+        auto settings = settingsFor(board.port());
+        settings.trackerSwitchEnabled = true;
+        settings.trackerSwitchTimeoutMs = 100;
+        ControlClient client;
+        QSignalSpy states(&client, &ControlClient::trackerStateChanged);
+        QSignalSpy commands(&board, &MockControlServer::commandReceived);
+        client.start(settings);
+        QTRY_VERIFY(qvariant_cast<TrackerState>(states.last()[0]).countKnown);
+        QVERIFY(!client.requestTracker(7));
+        QVERIFY(client.requestTracker(3));
+        QVERIFY(!client.requestTracker(4));
+        QTRY_VERIFY(qvariant_cast<TrackerState>(states.last()[0]).status.startsWith("Result unknown"));
+        QCOMPARE(qvariant_cast<TrackerState>(states.last()[0]).currentId, quint32(0));
+        QTRY_COMPARE(qvariant_cast<TrackerState>(states.last()[0]).currentId, quint32(3));
+        client.stop();
+        client.start(settings);
+        QTRY_VERIFY(qvariant_cast<TrackerState>(states.last()[0]).countKnown);
+        QCOMPARE(qvariant_cast<TrackerState>(states.last()[0]).currentId, quint32(0));
+        int changes = 0;
+        for (const auto &args : commands) {
+            const auto message = qvariant_cast<Message>(args[0]);
+            if (message.category == Category::Pipeline && message.command == quint8(PipelineCommand::ChangeTracker)) ++changes;
+        }
+        QCOMPARE(changes, 1);
     }
 
     void modelTimeoutAndReconnect()
@@ -673,7 +759,11 @@ private slots:
         QCOMPARE(app.state(), QProcess::Running);
         app.terminate();
         QVERIFY(app.waitForFinished(5000));
+#ifdef Q_OS_UNIX
+        QCOMPARE(app.exitStatus(), QProcess::CrashExit); // SIGTERM is a signal on Unix.
+#else
         QCOMPARE(app.exitCode(), 0);
+#endif
         QVERIFY(config.open(QIODevice::WriteOnly | QIODevice::Truncate));
         config.write(bytes + "  ack_timeout_ms: 0\n");
         config.close();

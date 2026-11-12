@@ -13,6 +13,11 @@ enum class PipelineCommand : quint8 { ModelCount = 1, TrackerCount = 2, ChangeMo
 enum class PipelinePhase : quint8 { Accepted = 1, Completed = 2 };
 enum class PipelineResult : quint8 { Ok, InvalidId, Busy, CreationFailed, Restored, RestoreFailed, NotReady };
 
+struct TrackerState {
+    quint32 count = 0, currentId = 0, requestedId = 0;
+    bool countKnown = false, busy = false;
+    QString status = "Not connected";
+};
 struct ModelState {
     quint32 count = 0, currentId = 0, requestedId = 0;
     bool countKnown = false, busy = false;
@@ -56,8 +61,9 @@ bool decodeState(const QByteArray &payload, BoardState &state);
 bool decodeAck(const QByteArray &payload, Ack &ack);
 QString resultName(Result result);
 QString commandName(Category category, quint8 command);
-QString pipelineResultName(PipelineResult result);
+QString pipelineResultName(PipelineResult result, bool tracker = false);
 }
+Q_DECLARE_METATYPE(Control::TrackerState)
 Q_DECLARE_METATYPE(Control::ModelState)
 Q_DECLARE_METATYPE(Control::BoardState)
 Q_DECLARE_METATYPE(Control::Connection)

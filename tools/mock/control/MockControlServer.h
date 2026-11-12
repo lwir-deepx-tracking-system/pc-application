@@ -24,6 +24,8 @@ public:
     void setPingReplies(bool enabled) { pingReplies = enabled; }
     void setModelResult(Control::PipelineResult result) { modelResult = result; }
     void setModelDuration(int ms) { modelDurationMs = ms; }
+    void setTrackerResult(Control::PipelineResult result) { trackerResult = result; }
+    void setTrackerDuration(int ms) { trackerDurationMs = ms; }
     void reinitialize();
     void publishState(const Control::BoardState &next);
 
@@ -48,4 +50,7 @@ private:
     bool modelBusy = false;
     int modelDurationMs = 200;
     Control::PipelineResult modelResult = Control::PipelineResult::Ok;
+    bool trackerBusy = false;
+    int trackerDurationMs = 200;
+    Control::PipelineResult trackerResult = Control::PipelineResult::Ok;
 };

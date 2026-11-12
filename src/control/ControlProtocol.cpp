@@ -124,17 +124,17 @@ QString commandName(Category category, quint8 command)
     return "PING";
 }
 
-QString pipelineResultName(PipelineResult result)
+QString pipelineResultName(PipelineResult result, bool tracker)
 {
     switch (result) {
-    case PipelineResult::Ok: return "Model changed";
-    case PipelineResult::InvalidId: return "Invalid model ID";
+    case PipelineResult::Ok: return tracker ? "Tracker changed" : "Model changed";
+    case PipelineResult::InvalidId: return tracker ? "Invalid tracker ID" : "Invalid model ID";
     case PipelineResult::Busy: return "Board busy; change rejected";
-    case PipelineResult::CreationFailed: return "Model creation failed";
-    case PipelineResult::Restored: return "Change failed; previous model restored";
-    case PipelineResult::RestoreFailed: return "Model restore failed; no active model";
-    case PipelineResult::NotReady: return "Model service not ready";
+    case PipelineResult::CreationFailed: return tracker ? "Tracker creation failed" : "Model creation failed";
+    case PipelineResult::Restored: return tracker ? "Change failed; previous tracker restored" : "Change failed; previous model restored";
+    case PipelineResult::RestoreFailed: return tracker ? "Tracker restore failed; no active tracker" : "Model restore failed; no active model";
+    case PipelineResult::NotReady: return tracker ? "Tracker service not ready" : "Model service not ready";
     }
-    return "Unknown model result";
+    return tracker ? "Unknown tracker result" : "Unknown model result";
 }
 }

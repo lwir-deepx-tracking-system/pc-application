@@ -68,6 +68,8 @@ AppConfig loadAppConfig(const QString &path)
             settings.connectTimeoutMs = interval("connect_timeout_ms", 2000);
             settings.reconnectIntervalMs = interval("reconnect_interval_ms", 1000);
             settings.modelSwitchTimeoutMs = interval("model_switch_timeout_ms", 30000);
+            settings.trackerSwitchTimeoutMs = interval("tracker_switch_timeout_ms", 30000);
+            settings.trackerSwitchEnabled = control["tracker_switch_enabled"].as<bool>(false);
         }
         const auto models = root["models"];
         if (models) {

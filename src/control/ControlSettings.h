@@ -11,5 +11,7 @@ struct ControlSettings {
     int connectTimeoutMs = 2000;
     int reconnectIntervalMs = 1000;
     bool modelSwitchEnabled = false; // Enabled by a nonempty PC model catalog.
+    bool trackerSwitchEnabled = false; // Opt in for boards with Pipeline tracker commands.
     int modelSwitchTimeoutMs = 30000;
+    int trackerSwitchTimeoutMs = 30000;
 };

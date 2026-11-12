@@ -19,6 +19,7 @@ public:
     bool requestHome();
     bool sendMove(qint8 x, qint8 y);
     bool requestModel(quint32 modelId);
+    bool requestTracker(quint32 trackerId);
     bool canControl() const;
     const Control::BoardState &boardState() const { return state; }
 
@@ -33,6 +34,7 @@ signals:
     void reconnectAttempted();
     void ackTimedOut();
     void modelStateChanged(const Control::ModelState &state);
+    void trackerStateChanged(const Control::TrackerState &state);
 
 private:
     void connectNow();
@@ -42,8 +44,10 @@ private:
     void setConnection(Control::Connection connection);
     void clearConnection();
     void queryModelCount();
+    void queryTrackerCount();
     bool receivePipeline(const Control::Message &message);
     void resetModels();
+    void resetTrackers();
     QTcpSocket socket;
     QTimer reconnectTimer, connectionTimer, pingTimer, deadlineTimer;
     QElapsedTimer clock;
@@ -56,7 +60,11 @@ private:
     bool attempted = false;
     qint64 pingSentNs = -1;
     Control::ModelState model;
+    Control::TrackerState tracker;
     quint32 nextRequestId = 0, countRequestId = 0, changeRequestId = 0;
     bool countPending = false, modelAccepted = false;
     qint64 countDeadline = -1, changeDeadline = -1;
+    quint32 trackerCountRequestId = 0, trackerChangeRequestId = 0;
+    bool trackerCountPending = false, trackerAccepted = false;
+    qint64 trackerCountDeadline = -1, trackerChangeDeadline = -1;
 };

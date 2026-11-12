@@ -84,8 +84,11 @@ int main(int argc, char *argv[])
     QObject::connect(&controller, &ApplicationController::manualInputEnabledChanged, &input, &ManualInputHandler::setEnabled);
     QObject::connect(&window, &MainWindow::autoRequested, &controller, &ApplicationController::requestAuto);
     QObject::connect(&window, &MainWindow::manualRequested, &controller, &ApplicationController::requestManual);
+    QObject::connect(&window, &MainWindow::homeRequested, &controller, &ApplicationController::requestHome);
     QObject::connect(&window, &MainWindow::modelRequested, &controller, &ApplicationController::requestModel);
     QObject::connect(&controller, &ApplicationController::modelStateChanged, &window, &MainWindow::setModelState);
+    QObject::connect(&window, &MainWindow::trackerRequested, &controller, &ApplicationController::requestTracker);
+    QObject::connect(&controller, &ApplicationController::trackerStateChanged, &window, &MainWindow::setTrackerState);
     QObject::connect(&controller, &ApplicationController::controlConnectionChanged, &window, &MainWindow::setControlConnection);
     QObject::connect(&controller, &ApplicationController::boardStateChanged, &window, &MainWindow::setBoardState);
     QObject::connect(&controller, &ApplicationController::commandFinished, &window, &MainWindow::showCommandResult);

@@ -27,6 +27,17 @@ ControlClient::ControlClient(QObject *parent) : QObject(parent)
             model.status = "Model count unavailable";
             emit modelStateChanged(model);
         }
+        if (trackerCountPending && now >= trackerCountDeadline) {
+            trackerCountPending = false;
+            tracker.status = "Tracker count unavailable";
+            emit trackerStateChanged(tracker);
+        }
+        if (tracker.busy && trackerChangeDeadline >= 0 && now >= trackerChangeDeadline) {
+            trackerChangeDeadline = -1;
+            tracker.currentId = 0;
+            tracker.status = "Result unknown; awaiting completion or reconnect";
+            emit trackerStateChanged(tracker);
+        }
         if (model.busy && changeDeadline >= 0 && now >= changeDeadline) {
             changeDeadline = -1;
             model.currentId = 0;
@@ -73,6 +84,7 @@ void ControlClient::clearConnection()
     received.clear();
     state = {};
     resetModels();
+    resetTrackers();
     setConnection(Control::Connection::Disconnected);
     socket.abort();
 }
@@ -120,7 +132,7 @@ void ControlClient::retry(const QString &message)
 
 bool ControlClient::canControl() const
 {
-    return connection == Control::Connection::Ready && !model.busy && state.gimbal != Control::GimbalState::Homing
+    return connection == Control::Connection::Ready && !model.busy && !tracker.busy && state.gimbal != Control::GimbalState::Homing
         && state.gimbal != Control::GimbalState::Error;
 }
 
@@ -181,6 +193,31 @@ void ControlClient::resetModels()
     emit modelStateChanged(model);
 }
 
+void ControlClient::resetTrackers()
+{
+    const bool unknown = tracker.busy;
+    tracker = {};
+    tracker.status = unknown ? "Connection lost; change result unknown" : "Current tracker unknown";
+    trackerCountPending = false;
+    trackerAccepted = false;
+    trackerCountDeadline = trackerChangeDeadline = -1;
+    emit trackerStateChanged(tracker);
+}
+
+void ControlClient::queryTrackerCount()
+{
+    if (!settings.trackerSwitchEnabled) return;
+    trackerCountRequestId = ++nextRequestId;
+    QByteArray payload(4, '\0');
+    qToBigEndian(trackerCountRequestId, reinterpret_cast<uchar *>(payload.data()));
+    if (send({Control::Category::Pipeline, quint8(Control::PipelineCommand::TrackerCount), payload})) {
+        trackerCountPending = true;
+        trackerCountDeadline = clock.elapsed() + settings.ackTimeoutMs;
+        tracker.status = "Querying trackers; current tracker unknown";
+        emit trackerStateChanged(tracker);
+    }
+}
+
 void ControlClient::queryModelCount()
 {
     if (!settings.modelSwitchEnabled) return;
@@ -213,13 +250,62 @@ bool ControlClient::requestModel(quint32 id)
     return true;
 }
 
+bool ControlClient::requestTracker(quint32 id)
+{
+    if (!settings.trackerSwitchEnabled || !canControl() || !tracker.countKnown || !id || id > tracker.count) return false;
+    trackerChangeRequestId = ++nextRequestId;
+    QByteArray payload(8, '\0');
+    auto *data = reinterpret_cast<uchar *>(payload.data());
+    qToBigEndian(trackerChangeRequestId, data);
+    qToBigEndian(id, data + 4);
+    if (!send({Control::Category::Pipeline, quint8(Control::PipelineCommand::ChangeTracker), payload})) return false;
+    tracker.requestedId = id;
+    tracker.busy = true;
+    trackerAccepted = false;
+    trackerChangeDeadline = clock.elapsed() + settings.trackerSwitchTimeoutMs;
+    tracker.status = "Request sent";
+    emit trackerStateChanged(tracker);
+    return true;
+}
+
 bool ControlClient::receivePipeline(const Control::Message &message)
 {
     using namespace Control;
     if (message.command != quint8(PipelineCommand::ModelCountReply)
-        && message.command != quint8(PipelineCommand::ModelResult)) return false;
+        && message.command != quint8(PipelineCommand::ModelResult)
+        && message.command != quint8(PipelineCommand::TrackerCountReply)
+        && message.command != quint8(PipelineCommand::TrackerResult)) return false;
     const auto *data = reinterpret_cast<const uchar *>(message.payload.constData());
     const auto requestId = qFromBigEndian<quint32>(data);
+    if (message.command == quint8(PipelineCommand::TrackerCountReply)) {
+        if (!trackerCountPending || requestId != trackerCountRequestId) return true;
+        trackerCountPending = false;
+        tracker.count = qFromBigEndian<quint32>(data + 4);
+        tracker.countKnown = true;
+        tracker.status = tracker.count ? "Select a tracker; current tracker unknown" : "No trackers available";
+        emit trackerStateChanged(tracker);
+        return true;
+    }
+    if (message.command == quint8(PipelineCommand::TrackerResult)) {
+        if (data[4] < 1 || data[4] > 2 || data[5] > quint8(PipelineResult::NotReady)
+            || (data[4] == 1 && data[5] != 0)) return false;
+        if (!tracker.busy || requestId != trackerChangeRequestId) return true;
+        const auto result = PipelineResult(data[5]);
+        if (PipelinePhase(data[4]) == PipelinePhase::Accepted) {
+            trackerAccepted = true;
+            tracker.status = "Switching tracker";
+        } else {
+            if (result == PipelineResult::Ok && !trackerAccepted) return false;
+            tracker.busy = false;
+            trackerChangeDeadline = -1;
+            if (result == PipelineResult::Ok) tracker.currentId = tracker.requestedId;
+            else if (result == PipelineResult::RestoreFailed || result == PipelineResult::CreationFailed) tracker.currentId = 0;
+            tracker.requestedId = 0;
+            tracker.status = pipelineResultName(result, true);
+        }
+        emit trackerStateChanged(tracker);
+        return true;
+    }
     if (message.command == quint8(PipelineCommand::ModelCountReply)) {
         if (!countPending || requestId != countRequestId) return true;
         countPending = false;
@@ -291,13 +377,14 @@ void ControlClient::receive()
                 pending.clear();
                 pingSentNs = -1;
                 resetModels();
+                resetTrackers();
                 emit resetRequested();
             }
             state = next;
             connectionTimer.stop();
             emit boardStateChanged(state);
             setConnection(Control::Connection::Ready);
-            if (initializeModels) queryModelCount();
+            if (initializeModels) { queryModelCount(); queryTrackerCount(); }
         } else {
             retry("Board sent a PC-only command");
             return;

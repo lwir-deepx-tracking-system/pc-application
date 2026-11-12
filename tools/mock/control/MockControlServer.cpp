@@ -103,11 +103,42 @@ void MockControlServer::apply(const Control::Message &message)
     using namespace Control;
     if (message.category == Category::Pipeline) {
         const auto command = PipelineCommand(message.command);
-        if (command != PipelineCommand::ModelCount && command != PipelineCommand::ChangeModel) {
+        if (command != PipelineCommand::ModelCount && command != PipelineCommand::ChangeModel
+            && command != PipelineCommand::TrackerCount && command != PipelineCommand::ChangeTracker) {
             client->abort(); return;
         }
         const auto *data = reinterpret_cast<const uchar *>(message.payload.constData());
         const auto requestId = qFromBigEndian<quint32>(data);
+        if (command == PipelineCommand::TrackerCount) {
+            QByteArray payload(8, '\0');
+            qToBigEndian(requestId, reinterpret_cast<uchar *>(payload.data()));
+            qToBigEndian(quint32(6), reinterpret_cast<uchar *>(payload.data()) + 4);
+            send({Category::Pipeline, quint8(PipelineCommand::TrackerCountReply), payload});
+            return;
+        }
+        if (command == PipelineCommand::ChangeTracker) {
+            const auto reply = [this, requestId](PipelinePhase phase, PipelineResult result) {
+                QByteArray payload(6, '\0');
+                qToBigEndian(requestId, reinterpret_cast<uchar *>(payload.data()));
+                payload[4] = char(phase); payload[5] = char(result);
+                send({Category::Pipeline, quint8(PipelineCommand::TrackerResult), payload});
+            };
+            const auto id = qFromBigEndian<quint32>(data + 4);
+            if (!id || id > 6 || trackerBusy || modelBusy) {
+                reply(PipelinePhase::Completed, trackerBusy || modelBusy ? PipelineResult::Busy : PipelineResult::InvalidId);
+                return;
+            }
+            trackerBusy = true;
+            publishState({}); // Transport simulation; no tracker is created.
+            reply(PipelinePhase::Accepted, PipelineResult::Ok);
+            const auto session = client;
+            const auto result = trackerResult;
+            QTimer::singleShot(trackerDurationMs, this, [this, session, reply, result] {
+                trackerBusy = false;
+                if (session && client == session) reply(PipelinePhase::Completed, result);
+            });
+            return;
+        }
         if (command == PipelineCommand::ModelCount) {
             QByteArray payload(8, '\0');
             qToBigEndian(requestId, reinterpret_cast<uchar *>(payload.data()));
@@ -122,8 +153,8 @@ void MockControlServer::apply(const Control::Message &message)
             send({Category::Pipeline, quint8(PipelineCommand::ModelResult), payload});
         };
         const auto id = qFromBigEndian<quint32>(data + 4);
-        if (!id || id > 2 || modelBusy) {
-            reply(PipelinePhase::Completed, modelBusy ? PipelineResult::Busy : PipelineResult::InvalidId);
+        if (!id || id > 2 || modelBusy || trackerBusy) {
+            reply(PipelinePhase::Completed, modelBusy || trackerBusy ? PipelineResult::Busy : PipelineResult::InvalidId);
             return;
         }
         modelBusy = true;

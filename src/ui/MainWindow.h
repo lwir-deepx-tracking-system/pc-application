@@ -32,12 +32,15 @@ public:
     void setClassLabels(const ClassLabels &labels);
     void setModels(const ModelOptions &models);
     void setModelState(const Control::ModelState &state);
+    void setTrackerState(const Control::TrackerState &state);
     void setRuntimeTelemetry(const RuntimeTelemetryView &view);
 
 signals:
     void autoRequested(quint32 trackId);
     void manualRequested();
+    void homeRequested();
     void modelRequested(quint32 id);
+    void trackerRequested(quint32 id);
     void framePainted(quint64 frameId, qint64 monotonicNs);
 
 private:
@@ -47,11 +50,13 @@ private:
     bool blocked() const;
     void updateControlActions();
     void updateModels();
+    void updateTrackers();
 
     VideoWidget *videoWidget;
     QComboBox *trackCombo;
     QPushButton *autoButton;
     QPushButton *manualButton;
+    QPushButton *homeButton;
     QLabel *connectionLabel, *modeLabel, *targetLabel, *gimbalLabel, *errorLabel;
     Control::BoardState board;
     bool controlReady = false, stateAvailable = false;
@@ -65,4 +70,7 @@ private:
     QLabel *currentModelLabel, *modelStatusLabel;
     ModelOptions models;
     Control::ModelState modelState;
+    QComboBox *trackerCombo;
+    QLabel *currentTrackerLabel, *trackerStatusLabel;
+    Control::TrackerState trackerState;
 };

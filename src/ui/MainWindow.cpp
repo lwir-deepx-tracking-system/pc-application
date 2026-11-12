@@ -110,6 +110,10 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     buttons->addWidget(autoButton);
     buttons->addWidget(manualButton);
     targetLayout->addLayout(buttons);
+    homeButton = new QPushButton("HOME");
+    homeButton->setObjectName("homeButton");
+    homeButton->setToolTip("Request the board to move the gimbal to its home position.");
+    targetLayout->addWidget(homeButton);
     panelLayout->addWidget(targetGroup);
 
     auto *modelGroup = new QGroupBox("MODEL");
@@ -131,6 +135,27 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
         const auto id = modelCombo->itemData(index).toUInt();
         if (id != modelState.currentId) emit modelRequested(id);
         updateModels(); // A rejected local request must not look like an applied model.
+    });
+
+    auto *trackerGroup = new QGroupBox("TRACKER");
+    auto *trackerLayout = new QVBoxLayout(trackerGroup);
+    currentTrackerLabel = addValueRow(trackerLayout, "Current", "Unknown");
+    currentTrackerLabel->setObjectName("currentTracker");
+    trackerCombo = new QComboBox;
+    trackerCombo->setObjectName("trackerCombo");
+    trackerCombo->setPlaceholderText("Select tracker");
+    trackerCombo->setToolTip("Tracker IDs are reported by the board; selecting one requests a switch.");
+    trackerLayout->addWidget(trackerCombo);
+    trackerStatusLabel = new QLabel("Not connected");
+    trackerStatusLabel->setObjectName("trackerStatus");
+    trackerStatusLabel->setWordWrap(true);
+    trackerLayout->addWidget(trackerStatusLabel);
+    panelLayout->addWidget(trackerGroup);
+    connect(trackerCombo, &QComboBox::activated, this, [this](int index) {
+        if (!trackerCombo->isEnabled() || index < 0) return;
+        const auto id = trackerCombo->itemData(index).toUInt();
+        if (id != trackerState.currentId) emit trackerRequested(id);
+        updateTrackers();
     });
 
     panelLayout->addStretch();
@@ -165,6 +190,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
         requestAuto(enteredTrackId());
     });
     connect(manualButton, &QPushButton::clicked, this, &MainWindow::requestManual);
+    connect(homeButton, &QPushButton::clicked, this, [this] { if (homeButton->isEnabled()) emit homeRequested(); });
     connect(videoWidget, &VideoWidget::autoRequested, this, &MainWindow::requestAuto);
     connect(videoWidget, &VideoWidget::manualRequested, this, &MainWindow::requestManual);
     connect(videoWidget, &VideoWidget::framePainted, this, &MainWindow::framePainted);
@@ -266,10 +292,12 @@ bool MainWindow::blocked() const
 
 void MainWindow::updateControlActions()
 {
-    const bool available = controlReady && stateAvailable && !blocked() && !modelState.busy;
+    const bool available = controlReady && stateAvailable && !blocked() && !modelState.busy && !trackerState.busy;
     autoButton->setEnabled(available && enteredTrackId() != 0);
     manualButton->setEnabled(available);
+    homeButton->setEnabled(available);
     updateModels();
+    updateTrackers();
 }
 
 void MainWindow::setModels(const ModelOptions &options)
@@ -294,7 +322,7 @@ void MainWindow::updateModels()
     }
     const auto selected = modelState.busy ? modelState.requestedId : modelState.currentId;
     modelCombo->setCurrentIndex(selected ? modelCombo->findData(selected) : -1);
-    modelCombo->setEnabled(controlReady && stateAvailable && !blocked() && !modelState.busy && modelCombo->count() > 0);
+    modelCombo->setEnabled(controlReady && stateAvailable && !blocked() && !modelState.busy && !trackerState.busy && modelCombo->count() > 0);
     QString current = "Unknown";
     for (const auto &option : models)
         if (option.id == modelState.currentId) current = option.name;
@@ -302,6 +330,29 @@ void MainWindow::updateModels()
     modelStatusLabel->setText(models.isEmpty() ? "No models configured"
         : modelState.countKnown && modelState.count && !modelCombo->count()
             ? "No configured IDs match the board catalog" : modelState.status);
+}
+
+void MainWindow::setTrackerState(const Control::TrackerState &state)
+{
+    trackerState = state;
+    updateControlActions();
+}
+
+void MainWindow::updateTrackers()
+{
+    const QSignalBlocker blocker(trackerCombo);
+    trackerCombo->clear();
+    if (trackerState.countKnown) {
+        for (quint32 id = 1; id <= trackerState.count && id <= 256; ++id)
+            trackerCombo->addItem(QString("Tracker %1").arg(id), id);
+    }
+    const auto selected = trackerState.busy ? trackerState.requestedId : trackerState.currentId;
+    trackerCombo->setCurrentIndex(selected ? trackerCombo->findData(selected) : -1);
+    trackerCombo->setEnabled(controlReady && stateAvailable && !blocked() && !modelState.busy
+        && !trackerState.busy && trackerCombo->count() > 0);
+    currentTrackerLabel->setText(trackerState.currentId ? QString("Tracker %1").arg(trackerState.currentId) : "Unknown");
+    trackerStatusLabel->setText(trackerState.countKnown && trackerState.count > 256
+        ? trackerState.status + " (showing first 256 IDs)" : trackerState.status);
 }
 
 void MainWindow::setControlConnection(Control::Connection connection)

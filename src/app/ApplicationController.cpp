@@ -58,6 +58,18 @@ ApplicationController::ApplicationController(QObject *parent) : QObject(parent)
     });
     connect(&control, &ControlClient::commandFinished, this, &ApplicationController::commandFinished);
     connect(&control, &ControlClient::errorOccurred, this, &ApplicationController::controlError);
+    connect(&control, &ControlClient::trackerStateChanged, this, [this](const Control::TrackerState &state) {
+        if (state.busy && !trackerWasBusy) {
+            runtimeTelemetry.clear(true);
+            emit inputResetRequested();
+            resetStream();
+        }
+        if (trackerWasBusy && !state.busy && state.status != Control::pipelineResultName(Control::PipelineResult::Ok, true))
+            runtimeTelemetry.cancelTransition();
+        trackerWasBusy = state.busy;
+        emit trackerStateChanged(state);
+        emit manualInputEnabledChanged(control.canControl());
+    });
     connect(&control, &ControlClient::modelStateChanged, this, [this](const Control::ModelState &state) {
         if (state.busy && !modelWasBusy) {
             runtimeTelemetry.clear(true);
@@ -135,6 +147,7 @@ void ApplicationController::startControl(const ControlSettings &settings) { cont
 void ApplicationController::requestAuto(quint32 id) { control.requestAuto(id); }
 void ApplicationController::requestManual() { control.requestManual(); }
 void ApplicationController::requestModel(quint32 id) { control.requestModel(id); }
+void ApplicationController::requestTracker(quint32 id) { control.requestTracker(id); }
 void ApplicationController::requestHome()
 {
     if (control.requestHome()) emit inputResetRequested();

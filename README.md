@@ -100,9 +100,21 @@ runtime의 모델 교체는 기존 추적 타깃을 해제하므로 완료 후 �
 
 Mock 제어 서버는 모델 ID 1, 2와 200ms의 교체 응답을 시뮬레이션한다. 실제 모델 로드·추론 검증은 아니다.
 
+### Tracker 변경
+
+`control.tracker_switch_enabled: true`이면 연결 후 기존 Pipeline Tracker count(0x02/0x82)를 조회한다.
+보드가 보고한 개수만큼 `Tracker 1` 등의 ID가 표시된다. 현재 TCP 규격에는 Tracker 이름과 활성 ID를
+조회하는 명령이 없으므로 연결 직후 현재 Tracker는 `Unknown`이다. 선택하면 Change tracker(0x04)를
+전송하고 Tracker result(0x84)의 Accepted와 Completed/OK를 구분한다. 완료 전에는 적용된 Tracker로
+표시하지 않으며 모델 변경과 타깃 조작을 잠근다. 실패 결과와 연결 해제는 별도로 표시한다.
+`control.tracker_switch_timeout_ms`가 지나도 완료 응답이 올 때까지 잠금을 유지하고 재전송하지 않는다.
+Tracker 번호는 Runtime `tracking_catalog`의 1부터 시작하는 ID이며 화면에서 모델 경로나 이름을
+추정하지 않는다. 기존 서버가 해당 명령을 지원하지 않으면 YAML에서 `tracker_switch_enabled: false`로
+설정한다. Mock 서버는 Tracker ID 1..6을 통신 시험용으로 시뮬레이션한다.
+
 ### TCP 제어 시험 절차
 
-현재 PC는 TCP 제어를 구현했으며, 실제 runtime 송신부·제어부는 별도 수정과 검증이 필요하다. 기본 YAML의 `control.host`는 로컬 Mock용 `127.0.0.1`, 포트는 `5002`다. 실제 짐벌에는 접근하지 않는다.
+현재 PC는 TCP 제어를 구현했다. 기본 YAML의 `control.host`는 보드 연결용 `192.168.50.2`, 포트는 `5002`다. 로컬 Mock 시험에서는 `control.host`를 `127.0.0.1`로 바꾼다. Mock은 실제 짐벌에 접근하지 않는다.
 
 프로젝트 루트에서 별도 터미널로 각각 실행한다.
 
@@ -122,7 +134,7 @@ Mock 제어 서버는 모델 ID 1, 2와 200ms의 교체 응답을 시뮬레이�
 - MANUAL 버튼 또는 영상의 빈 영역 클릭으로 수동 모드를 요청한다.
 - 영상 영역을 클릭한 뒤 방향키로 이동한다. 두 축 동시 입력은 대각 방향, 같은 축의 반대 키는 상쇄된다. 키를 모두 놓으면 `(0,0)`을 보낸다. 키 유지·자동 반복으로 명령을 반복 송신하지 않는다.
 - AUTO 중 방향키 입력도 수동 개입 요청으로 전달하며, 실제 타깃 해제와 MANUAL 전환은 보드가 판단한다.
-- Space로 기준 위치 복귀를 요청한다. 별도 HOME 버튼은 두지 않는다. Mock의 800ms HOME은 시뮬레이션이며 장비의 완료 판단 시간이 아니다.
+- HOME 버튼 또는 Space로 기준 위치 복귀를 요청한다. Mock의 800ms HOME은 시뮬레이션이며 장비의 완료 판단 시간이 아니다.
 - Track ID 편집 중에는 방향키·Space가 제어 명령으로 전송되지 않는다. 영상 영역에서 다른 곳으로 포커스가 옮겨지면 이동 입력을 해제한다.
 - 화면 모드·타깃·짐벌 상태는 ACK가 아닌 INIT / STATUS로 갱신한다. 제어 연결이나 상태 정보가 없거나 HOMING·ERROR 상태이면 조작을 비활성화한다.
 

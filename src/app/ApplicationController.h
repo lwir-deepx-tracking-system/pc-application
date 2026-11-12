@@ -25,6 +25,7 @@ public:
     void requestManual();
     void requestHome();
     void requestModel(quint32 id);
+    void requestTracker(quint32 id);
     void sendMove(qint8 x, qint8 y);
 
 signals:
@@ -45,6 +46,7 @@ signals:
     void inputResetRequested();
     void manualInputEnabledChanged(bool enabled);
     void modelStateChanged(const Control::ModelState &state);
+    void trackerStateChanged(const Control::TrackerState &state);
 
 private:
     void fail(const QString &message);
@@ -52,6 +54,7 @@ private:
     ControlClient control;
     Control::Mode inputMode = Control::Mode::Manual;
     bool modelWasBusy = false;
+    bool trackerWasBusy = false;
     VideoReceiver video;
     MetadataReceiver metadata;
     FrameSynchronizer synchronizer;
