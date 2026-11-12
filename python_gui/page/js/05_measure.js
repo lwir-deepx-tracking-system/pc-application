@@ -45,7 +45,7 @@ function history(m){
     h+='<button data-n="'+x.n+'"'+(on?' class="sel"':'')+'><span class="hn">'+x.n+'회차 · '+(x.name?esc(x.name):'이름 없음')+'</span><span class="hv">'+f1(x.delay_p50)+' / '+f1(x.delay_p95)+' ms</span></button>';}
   MH.innerHTML=h+'</div></details>';applyOpen(MH,'details',keep);
   for(const b of MH.querySelectorAll('button'))b.onclick=()=>{const n=+b.dataset.n;sel=(m.last&&m.last.n===n)?null:n;shownKey='';tick();};}
-function mshow(m){
+function mshow(m){if(m.available===false){$('mst').disabled=$('msp').disabled=true;MI.textContent=m.text||'측정 제어를 사용할 수 없습니다';return;}
   lastState=m;$('mst').disabled=m.on;$('msp').disabled=!m.on;
   if(m.on){chip('mdot','mtext','live','측정 중');MI.textContent=m.cur.n+'회차 측정 중'+(m.cur.name?' · '+m.cur.name:'')+' · '+m.frames+'프레임 · '+m.seconds.toFixed(0)+'초'+(m.video_frames!=null?' · 영상 '+m.video_frames+'장'+(m.video_dropped?' (놓침 '+m.video_dropped+')':''):'');}
   else{chip('mdot','mtext',m.last?'good':'',m.last?'측정 '+m.last.n+'회차 완료':'측정 대기');if(Date.now()>miHold)MI.textContent=m.last?'측정 끝 · 시작을 누르면 새 측정이 시작됩니다':'시작을 누르면 그 순간부터 프레임마다 기록합니다.';}

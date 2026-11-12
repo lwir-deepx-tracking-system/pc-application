@@ -1,5 +1,5 @@
 // rules / tracker (GET /rules every second)
-function rshow(r){rlast=r;
+function rshow(r){if(r.ok===false){RI.textContent='Tracker · '+(r.text||'Runtime 연결 오류');return;}rlast=r;
   if(othint&&JSON.stringify(r.reid_last||null)!==othint[1]){if(OH.textContent===othint[0])OH.textContent='';othint=null;}   // v41: the change finished (done or failed) -> the status line below says which
   const pl=r.predictors||null;
   PST.textContent=pl?pl.filter(p=>p.key!=='kalman').map(p=>(PN[p.key]?PN[p.key][0]:p.name)+': '+(p.available?'고를 수 있음':'고를 수 없음')+(p.note?' — '+p.note:'')).join(' / '):'이 서버 버전에는 위치 기억 선택이 없습니다. 서버를 다시 켜면 열립니다.';

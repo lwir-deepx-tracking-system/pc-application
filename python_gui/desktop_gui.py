@@ -11,6 +11,7 @@ import argparse
 import base64
 import io
 import json
+import os
 import socket
 import threading
 import time
@@ -202,9 +203,14 @@ class DesktopApp:
             try:
                 answer = self.routes.handle(message["url"], message["method"],
                                             message.get("body"))
-                GLib.idle_add(self._reply, message["id"], answer)
+                if os.environ.get("LWIR_GUI_TRACE"):
+                    print("GUI route", message["url"], answer, flush=True)
+            except Exception as exc:
+                print("GUI route error", message.get("url"), repr(exc), flush=True)
+                answer = dict(ok=False, text="GUI 요청 처리 오류")
             finally:
                 self.work_slots.release()
+            GLib.idle_add(self._reply, message["id"], answer)
 
         self.workers.submit(work)
 

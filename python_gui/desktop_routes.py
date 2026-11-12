@@ -30,21 +30,23 @@ class DesktopRoutes:
                     answer=answer)
 
     def _model(self) -> dict:
-        catalog = self.control.catalog("model", refresh=True)
+        catalog = self.control.catalog("model")
         return dict(catalog=[dict(id=x["id"], det=x["name"], name=x["name"],
                                   available=x["available"]) for x in catalog],
                     current=next((x["id"] for x in catalog if x["active"]), 0),
                     busy=False)
 
     def _rules(self) -> dict:
-        catalog = self.control.catalog("tracker", refresh=True)
+        catalog = self.control.catalog("tracker")
         policy = self.control.tracker_policy()
         if policy["warmth_min"] or policy["warmth_max"]:
             self.previous_warmth = (policy["warmth_min"], policy["warmth_max"])
+        can_relabel = policy["tracker_id"] in (1, 3) and any(
+            x["id"] == 3 and x["available"] for x in catalog)
         return dict(presets=[dict(key=str(x["id"]), name=x["name"],
                                   available=x["available"]) for x in catalog],
                     tracker=str(policy["tracker_id"]), relabel=policy["post_reid"],
-                    relabel_available=policy["post_reid"],
+                    relabel_available=can_relabel, stab=policy["gmc"],
                     warm_min=policy["warmth_min"], warm_max=policy["warmth_max"],
                     warm_on=bool(policy["warmth_min"] or policy["warmth_max"]),
                     warm_prev=list(self.previous_warmth),
@@ -99,11 +101,21 @@ class DesktopRoutes:
             if path == "/rules/set" and method == "POST":
                 if set(query) == {"tracker"}:
                     result = self.control.change("tracker", int(query["tracker"][0]))
+                elif set(query) == {"relabel"}:
+                    active = self.control.tracker_policy()["tracker_id"]
+                    requested = query["relabel"][0]
+                    if active not in (1, 3) or requested not in ("0", "1"):
+                        return dict(ok=False, text="KeepID는 ByteTrack 모드에서만 바꿀 수 있습니다")
+                    result = self.control.change("tracker", 3 if requested == "1" else 1)
                 else:
-                    keys = {"warm_min", "warm_max", "edge_birth", "confirm_ms", "warm_on"}
-                    if not query or set(query) - keys or ("warm_on" in query and len(query) != 1):
+                    keys = {"warm_min", "warm_max", "edge_birth", "confirm_ms", "warm_on", "stab"}
+                    if not query or set(query) - keys or (any(k in query for k in ("warm_on", "stab")) and len(query) != 1):
                         return dict(ok=False, text="이 설정은 Runtime LAN 명령으로 아직 지원하지 않습니다")
-                    if "warm_on" in query:
+                    if "stab" in query:
+                        if query["stab"][0] not in ("0", "1"):
+                            return dict(ok=False, text="흔들림 보정 값은 0 또는 1이어야 합니다")
+                        values = dict(gmc=query["stab"][0] == "1")
+                    elif "warm_on" in query:
                         if query["warm_on"][0] == "0":
                             values = dict(warmth_min=0, warmth_max=0)
                         elif query["warm_on"][0] == "1" and any(self.previous_warmth):
@@ -136,6 +148,11 @@ class DesktopRoutes:
                     return dict(ok=False, text=f"MANUAL 실패 ({result})")
                 self.control.move(x, y)
                 return self._state()
+            if path == "/measure" and method == "GET":
+                return dict(available=False, on=False, last=None, history=[],
+                            text="측정 제어는 Runtime LAN 명령으로 아직 지원하지 않습니다")
+            if path == "/replay" and method == "GET":
+                return dict(available=False, why="녹화 재생은 Runtime LAN 명령으로 아직 지원하지 않습니다")
             if path == "/healthz" and method == "GET":
                 metadata = self.latest()
                 return dict(up=time.monotonic() - self.started,

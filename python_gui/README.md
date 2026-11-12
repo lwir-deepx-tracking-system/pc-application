@@ -1,7 +1,9 @@
 # Python GUI integration status
 
-This directory preserves the current `model-bank/tracking_server/page/` UI source
-byte for byte. It was copied from model-bank `main` at
+This directory preserves the current `model-bank/tracking_server/page/` layout and
+visual design. The transport-facing JavaScript has small LAN adaptations for
+Runtime catalog names, unavailable entries and connection errors. It was copied
+from model-bank `main` at
 `3897aaf572fae1d87f9c8cc3d7db85028cc79501` on 2026-11-12.
 `python3 page/build_page.py --check` verifies the generated HTML against its
 31 HTML/CSS/JS parts. Do not edit `page/live_page.html` directly.
@@ -9,6 +11,9 @@ byte for byte. It was copied from model-bank `main` at
 `lan_protocol.py` implements the existing direct LAN TCP command framing,
 catalog queries, accepted/completed model and tracker changes, mode/gimbal
 commands, active tracker policy query, and UDP tracking metadata decoding.
+The page's KeepID switch selects the available ByteTrack/Post-ReID preset;
+its camera stabilization switch updates Runtime GMC. Model and tracker entries
+come from Runtime catalog replies.
 `desktop_routes.py` maps the original page's supported requests to those
 commands. Unsupported actions return an explicit failure; they never claim to
 apply a setting. The focused tests are:
@@ -35,11 +40,12 @@ measured for frame synchronization or sustained frame rate.
 
 The LAN bridge currently supports dynamic detection and tracker catalog
 queries and changes, active tracker policy readback, warmth/edge/confirmation
-setting changes, click selection, manual move/stop, and status/people readback.
+and GMC setting changes, ByteTrack KeepID preset switching, click selection,
+manual move/stop, and status/people readback.
 Policy changes replace the active tracker and reset its tracks/IDs. The
 original page also calls routes for GMC toggle, ReID switching, measurement,
 replay, performance, camera, and system controls. Those still require Runtime
-LAN commands and return a failure. The confirmation frame count readback is
+LAN commands and are shown as unavailable or return an explicit failure. The confirmation frame count readback is
 the current count after frame rate adjustment. Do not treat this as a feature complete
 replacement or launch the Python tracking HTTP server.
 

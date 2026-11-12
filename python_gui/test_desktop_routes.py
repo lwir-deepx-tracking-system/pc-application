@@ -67,9 +67,19 @@ class RouteTest(unittest.TestCase):
             warmth_max=60000, edge_birth=0.4, confirmation_ms=150)])
 
     def test_unsupported_setting_cannot_report_success(self):
-        answer = self.routes.handle("/rules/set?stab=1", "POST")
+        answer = self.routes.handle("/rules/set?predictor=gru", "POST")
         self.assertFalse(answer["ok"])
         self.assertEqual(self.control.changed, [])
+
+    def test_gmc_and_keepid_use_existing_runtime_changes(self):
+        self.assertTrue(self.routes.handle("/rules/set?stab=1", "POST")["stab"])
+        self.assertEqual(self.control.policies, [dict(gmc=True)])
+        self.assertEqual(self.routes.handle("/rules/set?relabel=1", "POST")["tracker"], "1")
+        self.assertEqual(self.control.changed, [("tracker", 3)])
+
+    def test_unavailable_actions_have_explicit_page_state(self):
+        self.assertFalse(self.routes.handle("/measure")["available"])
+        self.assertFalse(self.routes.handle("/replay")["available"])
 
     def test_click_uses_latest_metadata_id(self):
         self.routes.handle("/gimbal/click?x=0.2&y=0.3", "POST")
