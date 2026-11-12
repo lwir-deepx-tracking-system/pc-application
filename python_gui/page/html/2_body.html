@@ -19,7 +19,7 @@
         <!-- v26d: the numbers of the top line of the picture (TRACK fps, CAM fps, delay, compute), one point per second from GET /perf (read only). fps and ms have different scales, so they are two graphs, not one with two axes. -->
         <div class="pfo" id="pfo"><div class="pfb"><button id="pfbtn" title="속도 · 지연 그래프 켜기 / 끄기" aria-pressed="true">그래프</button><button id="pfspan" title="그래프 시간 범위 (누르면 1분 → 5분 → 15분)">1분</button></div>
           <div class="pfx">
-            <div class="pfh"><span class="pfl" title="추적 결과가 나오는 초당 횟수 (TRACK)"><i style="background:var(--c1)"></i>추적 <b class="num" id="pfv0">–</b></span><span class="pfl" title="카메라가 보낸 초당 프레임 수 (CAM)"><i style="background:var(--c2)"></i>카메라 <b class="num" id="pfv1">–</b></span><span>fps</span></div>
+            <div class="pfh"><span class="pfl" title="PC에 수신된 추적 메타데이터의 초당 횟수"><i style="background:var(--c1)"></i>추적 <b class="num" id="pfv0">–</b></span><span class="pfl" title="PC에서 디코딩해 표시한 영상의 초당 프레임 수"><i style="background:var(--c2)"></i>영상 <b class="num" id="pfv1">–</b></span><span>fps</span></div>
             <canvas id="pfc0"></canvas>
             <div class="pfh"><span class="pfl" title="프레임이 서버에 도착한 뒤 추적 결과가 나올 때까지, 1초 평균 (delay)"><i style="background:var(--c1)"></i>지연 <b class="num" id="pfv2">–</b></span><span class="pfl" title="그 1초 중 가장 느린 프레임"><i style="background:var(--c3)"></i>최대 <b class="num" id="pfv3">–</b></span><span class="pfl" title="한 프레임의 서버 안 계산 시간, 1초 평균 (compute)"><i style="background:var(--c2)"></i>처리 <b class="num" id="pfv4">–</b></span><span>ms</span></div>
             <canvas id="pfc1"></canvas>

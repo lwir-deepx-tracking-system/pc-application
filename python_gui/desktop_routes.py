@@ -6,6 +6,7 @@ No HTTP endpoint is started. Unsupported page actions fail explicitly.
 from __future__ import annotations
 
 import time
+from collections import deque
 from urllib.parse import parse_qs, urlsplit
 
 
@@ -15,6 +16,8 @@ class DesktopRoutes:
         self.latest = latest
         self.started = time.monotonic()
         self.previous_warmth = (0, 0)
+        self.perf_rows = deque(maxlen=900)
+        self.perf_last = None
 
     def _state(self, answer: str = "") -> dict:
         state = self.control.ping()
@@ -56,6 +59,24 @@ class DesktopRoutes:
                     predictors=[dict(key="kalman", available=True)],
                     predictor="kalman", apps=[], reids=[], reid_hot=False,
                     pending=None)
+
+    def _perf(self, since: float) -> dict:
+        """Observed host receive rates; Runtime stage latency is unavailable on wire."""
+        now = time.time()
+        stamp = time.monotonic()
+        latest = self.latest()
+        counts = (int(latest.get("received", 0)), int(latest.get("video_frames", 0)))
+        previous = self.perf_last
+        if previous is None:
+            self.perf_last = (stamp, counts)
+        elif stamp - previous[0] >= 0.8:
+            elapsed = stamp - previous[0]
+            track_fps = max(0.0, (counts[0] - previous[1][0]) / elapsed)
+            video_fps = max(0.0, (counts[1] - previous[1][1]) / elapsed)
+            self.perf_rows.append([int(now), track_fps, video_fps, None, None, None])
+            self.perf_last = (stamp, counts)
+        return dict(now=now, rows=[row for row in self.perf_rows if row[0] > since],
+                    source="PC 수신율", latency_available=False)
 
     def _people(self) -> dict:
         metadata = self.latest()
@@ -148,6 +169,8 @@ class DesktopRoutes:
                     return dict(ok=False, text=f"MANUAL 실패 ({result})")
                 self.control.move(x, y)
                 return self._state()
+            if path == "/perf" and method == "GET":
+                return self._perf(float(query.get("since", ["0"])[0]))
             if path == "/measure" and method == "GET":
                 return dict(available=False, on=False, last=None, history=[],
                             text="측정 제어는 Runtime LAN 명령으로 아직 지원하지 않습니다")

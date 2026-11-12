@@ -81,6 +81,17 @@ class RouteTest(unittest.TestCase):
         self.assertFalse(self.routes.handle("/measure")["available"])
         self.assertFalse(self.routes.handle("/replay")["available"])
 
+    def test_performance_graph_uses_real_receive_counts_only(self):
+        self.routes.latest = lambda: dict(received=12, video_frames=20)
+        self.routes.perf_last = (time.monotonic() - 1.0, (7, 10))
+        answer = self.routes.handle("/perf?since=0")
+        self.assertTrue(answer["rows"])
+        row = answer["rows"][-1]
+        self.assertGreater(row[1], 0)
+        self.assertGreater(row[2], 0)
+        self.assertEqual(row[3:], [None, None, None])
+        self.assertFalse(answer["latency_available"])
+
     def test_click_uses_latest_metadata_id(self):
         self.routes.handle("/gimbal/click?x=0.2&y=0.3", "POST")
         self.assertEqual(self.control.modes, [42])

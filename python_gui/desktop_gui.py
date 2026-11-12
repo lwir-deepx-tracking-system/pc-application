@@ -76,6 +76,7 @@ class DesktopApp:
         self.latest_lock = threading.Lock()
         self.latest_packet: dict = {}
         self.received = 0
+        self.video_frames = 0
         self.video_received_at = 0.0
         self.web_ready = False
         self.pending_frame = False
@@ -117,6 +118,7 @@ class DesktopApp:
     def latest(self) -> dict:
         with self.latest_lock:
             return dict(self.latest_packet, received=self.received,
+                        video_frames=self.video_frames,
                         video_received_at=self.video_received_at)
 
     def _receive_metadata(self):
@@ -179,6 +181,7 @@ class DesktopApp:
             "if(img) img.src=" + json.dumps(url) + ";", None, None, None)
         with self.latest_lock:
             self.video_received_at = time.monotonic()
+            self.video_frames += 1
         self.pending_frame = False
         return False
 

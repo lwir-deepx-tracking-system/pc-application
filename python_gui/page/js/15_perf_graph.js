@@ -11,17 +11,17 @@ function pfdraw(){
   for(const c of PFC){const cv=c.cv,w=cv.clientWidth,h=cv.clientHeight;if(!w||!h)continue;const dpr=window.devicePixelRatio||1;
     if(cv.width!==Math.round(w*dpr)||cv.height!==Math.round(h*dpr)){cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);}
     const g=cv.getContext('2d');g.setTransform(dpr,0,0,dpr,0,0);g.clearRect(0,0,w,h);
-    const L=24,R=2,T=6,B=2,pw=w-L-R,ph=h-T-B;let mx=c.min;for(const r of vis)for(const s of c.s)if(r[s[0]]>mx)mx=r[s[0]];mx=nice(mx);
+    const L=24,R=2,T=6,B=2,pw=w-L-R,ph=h-T-B;let mx=c.min;for(const r of vis)for(const s of c.s)if(r[s[0]]!=null&&r[s[0]]>mx)mx=r[s[0]];mx=nice(mx);
     const X=t=>L+(t-t0)/PF.span*pw,Y=v=>T+ph-(v/mx)*ph;
     g.font='9.5px "Segoe UI","Malgun Gothic",sans-serif';g.textBaseline='middle';g.textAlign='right';g.lineWidth=1;
     for(let i=0;i<=2;i++){const v=mx*i/2,y=Math.round(Y(v))-.5;g.strokeStyle=cssv('--line2');g.beginPath();g.moveTo(L,y);g.lineTo(w-R,y);g.stroke();if(i){g.fillStyle=cssv('--ink2');g.fillText(String(Math.round(v)),L-4,y+.5);}}
     g.save();g.beginPath();g.rect(L,T-2,pw,ph+3);g.clip();g.lineJoin='round';
     for(const s of c.s){g.strokeStyle=cssv(s[1]);g.lineWidth=s[2];g.beginPath();let pt=null;
-      for(const r of vis){const x=X(r[0]),y=Y(r[s[0]]);if(pt===null||r[0]-pt>3)g.moveTo(x,y);else g.lineTo(x,y);pt=r[0];}   // no line across a gap of over 3 s (camera gave no frame)
+      for(const r of vis){if(r[s[0]]==null){pt=null;continue;}const x=X(r[0]),y=Y(r[s[0]]);if(pt===null||r[0]-pt>3)g.moveTo(x,y);else g.lineTo(x,y);pt=r[0];}   // no line across a gap of over 3 s (camera gave no frame)
       g.stroke();}
     g.restore();}
   const last=PF.rows.length?PF.rows[PF.rows.length-1]:null,r=last&&now-last[0]<5?last:null;   // values older than 5 s are not shown as current
-  [[0,1],[1,2],[2,3],[3,4],[4,5]].forEach(([i,k])=>{$('pfv'+i).textContent=r?r[k].toFixed(0):'–';});}
+  [[0,1],[1,2],[2,3],[3,4],[4,5]].forEach(([i,k])=>{$('pfv'+i).textContent=r&&r[k]!=null?r[k].toFixed(0):'–';});}
 function pftick(){if(document.hidden||!PF.on||PF.busy)return;PF.busy=true;const since=PF.rows.length?PF.rows[PF.rows.length-1][0]:0;
   fetch('/perf?since='+since,{cache:'no-store'}).then(r=>r.json()).then(p=>{lastOk=Date.now();PF.off=p.now-Date.now()/1000;   // the board clock differs from this device's: its "now" is used for the time axis
     if(p.rows.length&&PF.rows.length&&p.rows[0][0]<=PF.rows[PF.rows.length-1][0])PF.rows=[];   // server restarted or its clock stepped back: start again

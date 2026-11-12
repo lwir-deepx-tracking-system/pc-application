@@ -38,6 +38,10 @@ Runtime's video and metadata destinations to the PC IP. The original page's
 the latest UDP metadata is overlaid. This display path has **not** been
 measured for frame synchronization or sustained frame rate.
 
+The performance graph shows measured PC video and metadata receive rates.
+Runtime processing latency is not sent in this metadata contract, so its graph
+fields remain unavailable rather than showing fabricated zeros.
+
 The LAN bridge currently supports dynamic detection and tracker catalog
 queries and changes, active tracker policy readback, warmth/edge/confirmation
 and GMC setting changes, ByteTrack KeepID preset switching, click selection,
