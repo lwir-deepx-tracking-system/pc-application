@@ -1,5 +1,8 @@
 import struct
 import unittest
+import gzip
+import tempfile
+from pathlib import Path
 
 from lan_protocol import (CAT_GIMBAL, CAT_MODE, CAT_PIPELINE, CAT_RECORDING, CAT_SYSTEM, ControlLink,
                           METADATA, TELEMETRY, TRACK, decode_metadata, encode)
@@ -30,6 +33,26 @@ class FakeSocket:
 
 
 class WireTest(unittest.TestCase):
+    def test_export_latest_recording_to_pc(self):
+        name = "MEASURE_20261116_142347_0"
+        files = (gzip.compress(b"raw pixels"), b"frame\n", b"tracks\n", b"recording\n")
+        replies = [encode(CAT_RECORDING, 0x84,
+                          struct.pack(">IB64s", 1, 0, name.encode()))]
+        replies.extend(encode(CAT_RECORDING, 0x85,
+                              struct.pack(">IBQQ", request_id, 0, len(data), 0) + data)
+                       for request_id, data in enumerate(files, 2))
+        sock = FakeSocket(replies)
+        client = ControlLink("unused")
+        client._socket = sock
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(client.export_latest_recording(root))
+            self.assertEqual(output.parent, Path(root))
+            self.assertEqual(gzip.decompress((output / "frames.raw.gz").read_bytes()),
+                             b"raw pixels")
+            self.assertEqual((output / "frames.csv").read_bytes(), files[1])
+        self.assertEqual([packet[5] for packet in sock.sent], [4, 5, 5, 5, 5])
+        self.assertEqual([len(packet) for packet in sock.sent[1:]], [87] * 4)
+
     def test_raw_recording_wire(self):
         reply = struct.pack(">IBBBBIQQ", 1, 0, 1, 0, 0, 7, 2, 0)
         sock = FakeSocket([encode(CAT_RECORDING, 0x82, reply)])

@@ -12,6 +12,9 @@ import struct
 import threading
 import time
 import math
+import gzip
+import pathlib
+import re
 from dataclasses import dataclass
 
 MAGIC = b"LWIR"
@@ -115,7 +118,7 @@ class ControlLink:
 
     def _read(self) -> tuple[int, int, bytes]:
         magic, category, command, length = HEADER.unpack(self._read_exact(HEADER.size))
-        if magic != MAGIC or length > 4096:
+        if magic != MAGIC or length > 32789:
             raise ProtocolError("invalid control frame")
         return category, command, self._read_exact(length)
 
@@ -258,6 +261,59 @@ class ControlLink:
                 return dict(ok=result == 0, on=bool(active), failed=bool(failed),
                             n=session, frames=frames, dropped=dropped)
             except (OSError, ProtocolError, TimeoutError):
+                self.close()
+                raise
+
+    def export_latest_recording(self, root: str = "/workspace/recordings") -> str:
+        """Copy the newest completed board recording over the existing LAN TCP link."""
+        names = ("frames.raw.gz", "frames.csv", "tracks.csv", "recording.txt")
+        with self._lock:
+            try:
+                request_id = self._next_id()
+                self._connect().sendall(encode(CAT_RECORDING, 4, struct.pack(">I", request_id)))
+                reply = self._wait_for(CAT_RECORDING, 0x84, request_id)
+                if len(reply) != 69 or reply[4] != 0:
+                    raise ProtocolError("no completed recording on board")
+                name = reply[5:].split(b"\0", 1)[0].decode("ascii")
+                if not re.fullmatch(r"MEASURE_[0-9_]+", name):
+                    raise ProtocolError("invalid recording directory name")
+                target = pathlib.Path(root) / name
+                if target.exists():
+                    raise FileExistsError(f"recording already exists: {target}")
+                partial = pathlib.Path(root) / (name + ".partial")
+                partial.mkdir(parents=True, exist_ok=True)
+                for file_id, filename in enumerate(names, 1):
+                    offset = 0
+                    expected = None
+                    with (partial / filename).open("wb") as output:
+                        while expected is None or offset < expected:
+                            request_id = self._next_id()
+                            payload = struct.pack(">I64sBQH", request_id,
+                                                  name.encode("ascii"), file_id,
+                                                  offset, 32768)
+                            self._connect().sendall(encode(CAT_RECORDING, 5, payload))
+                            chunk = self._wait_for(CAT_RECORDING, 0x85, request_id,
+                                                   timeout=10.0)
+                            if len(chunk) < 21:
+                                raise ProtocolError("short recording chunk")
+                            _, result, total, returned = struct.unpack_from(">IBQQ", chunk)
+                            data = chunk[21:]
+                            if result or returned != offset or len(data) > 32768 or \
+                                    (expected is not None and total != expected) or \
+                                    offset + len(data) > total or \
+                                    (not data and offset < total):
+                                raise ProtocolError("invalid recording chunk")
+                            expected = total
+                            output.write(data)
+                            offset += len(data)
+                    if (partial / filename).stat().st_size != expected:
+                        raise ProtocolError("incomplete recording file")
+                with gzip.open(partial / names[0], "rb") as source:
+                    while source.read(1024 * 1024):
+                        pass
+                partial.rename(target)
+                return str(target)
+            except (OSError, ProtocolError, TimeoutError, UnicodeError):
                 self.close()
                 raise
 

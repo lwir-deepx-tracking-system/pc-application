@@ -65,6 +65,12 @@ and Benchmark architecture.
 제어한다. Runtime은 Orange Pi의 `measurement.output_root/recordings/`에
 `frames.raw.gz`(640×480 16비트 원본), `frames.csv`, `tracks.csv`,
 `recording.txt`를 저장한다.
-디스크가 느리면 녹화 큐에서 놓친 프레임 수를 표시한다. PC로 원본을 전송하거나
-이 화면에서 재생하는 기능은 아직 연결되지 않았다. 측정 통계와 지난 녹화 목록도
-현재 LAN 계약에 없다. 네트워크는 기존 UDP 5000/5001·TCP 5002만 사용한다.
+디스크가 느리면 녹화 큐에서 놓친 프레임 수를 표시한다. 측정 화면의
+`최근 녹화 PC로 내보내기`는 완료된 최신 녹화의 네 파일을 기존 TCP 5002
+명령 연결로 받아 PC `/workspace/recordings/MEASURE_*/`에 저장한다.
+전송 중에는 `.partial` 디렉터리를 사용하고 gzip 무결성을 확인한다.
+PC에 동일 이름의 녹화가 이미 있으면 덮어쓰지 않는다. 실제 장비에서는
+PC와 Orange Pi를 유선 LAN으로 연결하고 `--board`에는 Orange Pi의
+유선 IP를 지정한다. 인터넷, Tailscale, SSH, 별도 HTTP 서버는 필요 없다.
+이 화면에서 재생하는 기능과 지난 녹화 목록은 아직 연결되지 않았다.
+네트워크는 기존 UDP 5000/5001·TCP 5002만 사용한다.

@@ -227,6 +227,8 @@ class DesktopRoutes:
                                gz_bytes=0))
                 self.recording_started = None
                 return self._measure_state(status)
+            if path == "/measure/export" and method == "POST":
+                return dict(ok=True, path=self.control.export_latest_recording())
             if path == "/replay" and method == "GET":
                 return dict(available=False, why="녹화 재생은 Runtime LAN 명령으로 아직 지원하지 않습니다")
             if path == "/healthz" and method == "GET":

@@ -52,6 +52,9 @@ class FakeControl:
             self.rec = dict(self.rec, on=False, frames=3)
         return dict(self.rec)
 
+    def export_latest_recording(self):
+        return "/workspace/recordings/MEASURE_20261116_142347_0"
+
 
 class RouteTest(unittest.TestCase):
     def setUp(self):
@@ -114,6 +117,11 @@ class RouteTest(unittest.TestCase):
         stopped = self.routes.handle("/measure/stop", "POST", "{}")
         self.assertFalse(stopped["on"])
         self.assertEqual(stopped["last"]["video"]["frames"], 3)
+
+    def test_export_route_reports_pc_path(self):
+        answer = self.routes.handle("/measure/export", "POST")
+        self.assertEqual(answer, dict(ok=True,
+            path="/workspace/recordings/MEASURE_20261116_142347_0"))
 
     def test_performance_graph_uses_real_receive_counts_only(self):
         self.routes.latest = lambda: dict(received=12, video_frames=20)

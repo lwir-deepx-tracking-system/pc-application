@@ -11,7 +11,7 @@ const LEGEND='<details class="fold"><summary>항목 설명</summary><dl class="l
   '<dt>트래커</dt><dd>박스를 이전 프레임과 이어 붙이는 추적 계산 시간.</dd>'+
   '<dt>p50 · p95 · p99</dt><dd>프레임의 50% · 95% · 99%가 이 값 이하라는 뜻. 최대는 가장 느린 한 프레임입니다.</dd>'+
   '<dt>&gt;33</dt><dd>33 ms(30 fps 한 프레임 시간)를 넘긴 프레임의 비율. 33 ms를 넘긴 칸은 노란색입니다.</dd></dl></details>';
-let sel=null, shownKey='', lastState=null, editing=false, miHold=0;
+let sel=null, shownKey='', lastState=null, editing=false, miHold=0, exporting=false;
 const note=t=>{MI.textContent=t;miHold=Date.now()+4000;};
 const openState=(root,sel_)=>{const o={};root.querySelectorAll(sel_).forEach(d=>{if(d.dataset.k)o[d.dataset.k]=d.open;});return o;};
 const applyOpen=(root,sel_,o)=>{root.querySelectorAll(sel_).forEach(d=>{if(d.dataset.k in o)d.open=o[d.dataset.k];});};
@@ -42,7 +42,7 @@ function history(m){
   MH.innerHTML=h+'</div></details>';applyOpen(MH,'details',keep);
   for(const b of MH.querySelectorAll('button'))b.onclick=()=>{const n=+b.dataset.n;sel=(m.last&&m.last.n===n)?null:n;shownKey='';tick();};}
 function mshow(m){if(m.available===false){$('mst').disabled=$('msp').disabled=true;MI.textContent=m.text||'측정 제어를 사용할 수 없습니다';return;}
-  lastState=m;$('mst').disabled=m.on;$('msp').disabled=!m.on&&!m.failed;
+  lastState=m;$('mst').disabled=m.on;$('msp').disabled=!m.on&&!m.failed;$('mexport').disabled=m.on||exporting;
   if(m.failed){MI.textContent='원본 영상 저장 오류가 발생했습니다. 종료를 눌러 저장 스레드를 정리하세요.';return;}
   if(m.on){chip('mdot','mtext','live','측정 중');MI.textContent=m.cur.n+'회차 측정 중'+(m.cur.name?' · '+m.cur.name:'')+' · '+m.frames+'프레임 · '+m.seconds.toFixed(0)+'초'+(m.video_frames!=null?' · 영상 '+m.video_frames+'장'+(m.video_dropped?' (놓침 '+m.video_dropped+')':''):'');}
   else{chip('mdot','mtext',m.last?'good':'',m.last?'측정 '+m.last.n+'회차 완료':'측정 대기');if(Date.now()>miHold)MI.textContent=m.last?'측정 끝 · 시작을 누르면 새 측정이 시작됩니다':'시작을 누르면 그 순간부터 프레임마다 기록합니다.';}
@@ -53,3 +53,9 @@ function tick(){if(document.hidden)return Promise.resolve();return fetch('/measu
 function mpost(u,body){return fetch(u,{method:'POST',headers:{'X-Gimbal':'1','Content-Type':'application/json'},body:JSON.stringify(body||{})}).then(r=>r.json()).then(m=>{sel=null;shownKey='';mshow(m);}).catch(()=>{note('서버 연결 끊김');});}
 $('mst').addEventListener('click',()=>mpost('/measure/start',{name:MN.value,memo:MM.value,video:$('mvid').checked}));
 $('msp').addEventListener('click',()=>mpost('/measure/stop',{memo:MM.value}).then(()=>{MN.value='';MM.value='';MM.style.height='';}));
+$('mexport').addEventListener('click',()=>{
+  exporting=true;$('mexport').disabled=true;MI.textContent='PC /workspace/recordings로 가져오는 중…';
+  fetch('/measure/export',{method:'POST'}).then(r=>r.json()).then(r=>{
+    note(r.ok?'PC 저장 완료: '+r.path:(r.text||'내보내기 실패'));
+  }).catch(()=>note('내보내기 실패')).finally(()=>{exporting=false;$('mexport').disabled=!!(lastState&&lastState.on);});
+});
