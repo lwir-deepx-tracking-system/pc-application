@@ -6,6 +6,7 @@ No HTTP endpoint is started. Unsupported page actions fail explicitly.
 from __future__ import annotations
 
 import time
+import json
 from collections import deque
 from urllib.parse import parse_qs, urlsplit
 
@@ -19,6 +20,21 @@ class DesktopRoutes:
         self.previous_edge = 0.0
         self.perf_rows = deque(maxlen=900)
         self.perf_last = None
+        self.recording_started = None
+        self.recording_name = ""
+        self.recording_memo = ""
+        self.recording_last = None
+
+    def _measure_state(self, status=None) -> dict:
+        status = status or self.control.recording()
+        elapsed = max(0.0, time.monotonic() - self.recording_started) if \
+            status["on"] and self.recording_started is not None else 0.0
+        current = dict(n=status["n"], name=self.recording_name,
+                       memo=self.recording_memo)
+        return dict(available=True, on=status["on"], failed=status["failed"], cur=current,
+                    frames=status["frames"], video_frames=status["frames"],
+                    video_dropped=status["dropped"], seconds=elapsed,
+                    last=self.recording_last, history=[])
 
     def _state(self, answer: str = "") -> dict:
         state = self.control.ping()
@@ -182,8 +198,35 @@ class DesktopRoutes:
             if path == "/perf" and method == "GET":
                 return self._perf(float(query.get("since", ["0"])[0]))
             if path == "/measure" and method == "GET":
-                return dict(available=False, on=False, last=None, history=[],
-                            text="측정 제어는 Runtime LAN 명령으로 아직 지원하지 않습니다")
+                return self._measure_state()
+            if path == "/measure/start" and method == "POST":
+                values = json.loads(body or "{}")
+                if not values.get("video", True):
+                    return dict(available=False, on=False,
+                                text="원본 영상 저장을 선택해야 합니다")
+                name = str(values.get("name", ""))
+                status = self.control.recording("start", name, True)
+                if not status["ok"]:
+                    return dict(available=False, on=False, text="녹화를 시작하지 못했습니다")
+                self.recording_started = time.monotonic()
+                self.recording_name = name
+                self.recording_memo = str(values.get("memo", ""))
+                return self._measure_state(status)
+            if path == "/measure/stop" and method == "POST":
+                values = json.loads(body or "{}")
+                status = self.control.recording("stop")
+                if not status["ok"]:
+                    return dict(available=False, on=False, text="녹화 종료를 확인하지 못했습니다")
+                elapsed = max(0.0, time.monotonic() - self.recording_started) if \
+                    self.recording_started is not None else 0.0
+                self.recording_memo = str(values.get("memo", self.recording_memo))
+                self.recording_last = dict(n=status["n"], name=self.recording_name,
+                    memo=self.recording_memo, frames=status["frames"], seconds=elapsed,
+                    out_fps=None, cam_fps=(status["frames"] / elapsed if elapsed else None),
+                    video=dict(frames=status["frames"], dropped=status["dropped"],
+                               gz_bytes=0))
+                self.recording_started = None
+                return self._measure_state(status)
             if path == "/replay" and method == "GET":
                 return dict(available=False, why="녹화 재생은 Runtime LAN 명령으로 아직 지원하지 않습니다")
             if path == "/healthz" and method == "GET":

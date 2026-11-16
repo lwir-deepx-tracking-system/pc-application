@@ -1,5 +1,6 @@
 import unittest
 import time
+import json
 
 from desktop_routes import DesktopRoutes
 from lan_protocol import BoardState
@@ -11,6 +12,7 @@ class FakeControl:
         self.modes = []
         self.moves = []
         self.policies = []
+        self.rec = dict(ok=True, on=False, failed=False, n=0, frames=0, dropped=0)
 
     def ping(self):
         return BoardState(mode=0, target=0, gimbal=0, error=0, selected_id=0)
@@ -41,6 +43,14 @@ class FakeControl:
 
     def move(self, x, y):
         self.moves.append((x, y))
+
+    def recording(self, action="status", name="", video=True):
+        if action == "start":
+            self.rec = dict(ok=True, on=True, failed=False, n=self.rec["n"] + 1,
+                            frames=0, dropped=0)
+        elif action == "stop":
+            self.rec = dict(self.rec, on=False, frames=3)
+        return dict(self.rec)
 
 
 class RouteTest(unittest.TestCase):
@@ -93,8 +103,17 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(self.control.changed, [("tracker", 3)])
 
     def test_unavailable_actions_have_explicit_page_state(self):
-        self.assertFalse(self.routes.handle("/measure")["available"])
+        self.assertTrue(self.routes.handle("/measure")["available"])
         self.assertFalse(self.routes.handle("/replay")["available"])
+
+    def test_recording_start_stop_routes(self):
+        start = self.routes.handle("/measure/start", "POST", json.dumps(
+            dict(name="test", memo="offline", video=True)))
+        self.assertTrue(start["on"])
+        self.assertEqual(start["cur"]["name"], "test")
+        stopped = self.routes.handle("/measure/stop", "POST", "{}")
+        self.assertFalse(stopped["on"])
+        self.assertEqual(stopped["last"]["video"]["frames"], 3)
 
     def test_performance_graph_uses_real_receive_counts_only(self):
         self.routes.latest = lambda: dict(received=12, video_frames=20)

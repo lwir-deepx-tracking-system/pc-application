@@ -22,7 +22,7 @@ apply a setting. The focused tests are:
 PYTHONPATH=python_gui python3 -m unittest python_gui/test_lan_protocol.py python_gui/test_desktop_routes.py
 ```
 
-`desktop_gui.py` runs the unmodified page inside Gtk/WebKit2. It receives the
+`desktop_gui.py` runs the page inside Gtk/WebKit2. It receives the
 Runtime's H.264/RTP video and tracking metadata on UDP 5000/5001 and uses
 the existing Runtime TCP 5002 command service. It does not start an HTTP,
 MJPEG, or WebSocket server. Start it on the PC with:
@@ -49,11 +49,22 @@ manual move/stop, and status/people readback.
 Policy changes replace the active tracker and reset its tracks/IDs. Filter
 tiles can restore a threshold only after the corresponding value was entered
 in Filter settings. Prediction control and predicted box display require new
-Runtime commands and are unavailable. Hot ReID switching, measurement,
+Runtime commands and are unavailable. Hot ReID switching, measurement statistics,
 replay, camera, and system controls also require Runtime LAN commands and
 return an explicit failure. The confirmation frame count readback is the
 current count after frame rate adjustment. Do not treat this as a feature
 complete replacement or launch the Python tracking HTTP server.
 
-The final layout remains the source page; only its transport boundary may be
-adapted. The Orange Pi keeps its C++ Runtime and Benchmark architecture.
+The final layout follows the source page; its transport and recording labels
+are adapted to the direct LAN contract. The Orange Pi keeps its C++ Runtime
+and Benchmark architecture.
+
+# 원본 녹화
+
+화면의 측정 시작·중지 버튼은 LAN TCP 5002의 Recording 카테고리로 C++ Runtime을
+제어한다. Runtime은 Orange Pi의 `measurement.output_root/recordings/`에
+`frames.raw.gz`(640×480 16비트 원본), `frames.csv`, `tracks.csv`,
+`recording.txt`를 저장한다.
+디스크가 느리면 녹화 큐에서 놓친 프레임 수를 표시한다. PC로 원본을 전송하거나
+이 화면에서 재생하는 기능은 아직 연결되지 않았다. 측정 통계와 지난 녹화 목록도
+현재 LAN 계약에 없다. 네트워크는 기존 UDP 5000/5001·TCP 5002만 사용한다.

@@ -1,7 +1,7 @@
 import struct
 import unittest
 
-from lan_protocol import (CAT_GIMBAL, CAT_MODE, CAT_PIPELINE, CAT_SYSTEM, ControlLink,
+from lan_protocol import (CAT_GIMBAL, CAT_MODE, CAT_PIPELINE, CAT_RECORDING, CAT_SYSTEM, ControlLink,
                           METADATA, TELEMETRY, TRACK, decode_metadata, encode)
 
 
@@ -30,6 +30,16 @@ class FakeSocket:
 
 
 class WireTest(unittest.TestCase):
+    def test_raw_recording_wire(self):
+        reply = struct.pack(">IBBBBIQQ", 1, 0, 1, 0, 0, 7, 2, 0)
+        sock = FakeSocket([encode(CAT_RECORDING, 0x82, reply)])
+        client = ControlLink("unused")
+        client._socket = sock
+        result = client.recording("start", "현장", True)
+        self.assertTrue(result["on"])
+        self.assertEqual(result["n"], 7)
+        self.assertEqual(sock.sent[0][4:6], bytes((CAT_RECORDING, 2)))
+
     def test_gimbal_position_estimate(self):
         sock = FakeSocket([encode(CAT_GIMBAL, 0x84,
                                   struct.pack(">Bff", 1, 52.5, 40.0))])

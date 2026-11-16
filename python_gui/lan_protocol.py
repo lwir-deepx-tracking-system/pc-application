@@ -25,6 +25,8 @@ CAT_SYSTEM = 1
 CAT_MODE = 2
 CAT_GIMBAL = 3
 CAT_PIPELINE = 4
+CAT_RECORDING = 5
+RECORDING_STATUS = struct.Struct(">IBBBBIQQ")
 
 
 class ProtocolError(RuntimeError):
@@ -229,6 +231,35 @@ class ControlLink:
                         confirmation_frames=frames, confirmation_ms=ms,
                         class_gate=bool(flags & 1), gmc=bool(flags & 2),
                         post_reid=bool(flags & 4))
+
+    def recording(self, action: str = "status", name: str = "", video: bool = True) -> dict:
+        commands = {"status": 1, "start": 2, "stop": 3}
+        if action not in commands:
+            raise ValueError("invalid recording action")
+        command = commands[action]
+        with self._lock:
+            request_id = self._next_id()
+            payload = struct.pack(">I", request_id)
+            if command == 2:
+                encoded = name.encode("utf-8")[:64]
+                while encoded and (encoded[-1] & 0xC0) == 0x80:
+                    encoded = encoded[:-1]
+                payload += bytes((int(video),)) + encoded.ljust(64, b"\0")
+            try:
+                self._connect().sendall(encode(CAT_RECORDING, command, payload))
+                reply = self._wait_for(CAT_RECORDING, command | 0x80, request_id,
+                                       timeout=30.0 if command == 3 else None)
+                if len(reply) != RECORDING_STATUS.size:
+                    raise ProtocolError("invalid recording response")
+                _, result, active, failed, reserved, session, frames, dropped = \
+                    RECORDING_STATUS.unpack(reply)
+                if reserved or active > 1 or failed > 1:
+                    raise ProtocolError("invalid recording status")
+                return dict(ok=result == 0, on=bool(active), failed=bool(failed),
+                            n=session, frames=frames, dropped=dropped)
+            except (OSError, ProtocolError, TimeoutError):
+                self.close()
+                raise
 
     def change_policy(self, **values) -> int:
         """Replace the active tracker after the Runtime completes a policy change."""
